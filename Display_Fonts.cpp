@@ -47,7 +47,7 @@ static const uint8_t glyph_O_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x88),ROW(0x88),
 static const uint8_t glyph_P_bits[7] = {ROW(0xF0),ROW(0x88),ROW(0x88),ROW(0xF0),ROW(0x80),ROW(0x80),ROW(0x80)};
 static const uint8_t glyph_Q_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0xA8),ROW(0x90),ROW(0x68)};
 static const uint8_t glyph_R_bits[7] = {ROW(0xF0),ROW(0x88),ROW(0x88),ROW(0xF0),ROW(0xA0),ROW(0x90),ROW(0x88)};
-static const uint8_t glyph_S_bits[7] = {ROW(0x78),ROW(0x80),ROW(0x70),ROW(0x08),ROW(0x08),ROW(0x88),ROW(0x70)};
+static const uint8_t glyph_S_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x80),ROW(0x70),ROW(0x08),ROW(0x88),ROW(0x70)};
 static const uint8_t glyph_T_bits[7] = {ROW(0xF8),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20)};
 static const uint8_t glyph_U_bits[7] = {ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x70)};
 static const uint8_t glyph_V_bits[7] = {ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x50),ROW(0x50),ROW(0x20)};
@@ -74,10 +74,14 @@ const BDFont FONT_FUR_CAPS_5x7 = {'A','Z',furCaps_glyphs};
 static const uint8_t glyph_percent_bits[7] = {0x88,0x08,0x10,0x20,0x40,0x88,0x00};
 static const uint8_t glyph_degree_bits[7]  = {0x60,0x90,0x90,0x60,0x00,0x00,0x00};
 static const uint8_t glyph_slash_bits[7]   = {0x08,0x10,0x20,0x40,0x80,0x00,0x00};
+static const uint8_t glyph_hyphen_bits[7]  = {0x00,0x00,0x00,0x70,0x00,0x00,0x00};
+static const uint8_t glyph_m_bits[7]       = {0x00,0x00,0xD0,0xA8,0xA8,0xA8,0xA8};
 
 static const BDGlyph glyph_percent = {5,7,glyph_percent_bits};
 static const BDGlyph glyph_degree  = {5,7,glyph_degree_bits};
 static const BDGlyph glyph_slash   = {5,7,glyph_slash_bits};
+static const BDGlyph glyph_hyphen  = {5,7,glyph_hyphen_bits};
+static const BDGlyph glyph_m       = {5,7,glyph_m_bits};
 
 // =======================================================
 // Rendering helpers
@@ -206,6 +210,42 @@ void drawTextScaled(int x, int y, const char *text,
             continue;
         }
 
+        // ---- 7) Hyphen ----
+        if (c == '-') {
+            const BDGlyph &g = glyph_hyphen;
+            for (uint8_t row = 0; row < g.height; row++) {
+                uint8_t bits = g.bitmap[row];
+                for (uint8_t col = 0; col < g.width; col++) {
+                    if (bits & (0x80 >> col)) {
+                        for (uint8_t dy = 0; dy < scale; dy++)
+                        for (uint8_t dx = 0; dx < scale; dx++)
+                            drawPixel_FAST(cx + col*scale + dx, y + row*scale + dy, color);
+                    }
+                }
+            }
+            cx += (glyph_hyphen.width + 1) * scale;
+            text++;
+            continue;
+        }
+
+        // ---- lowercase m ----
+        if (c == 'm') {
+            const BDGlyph &g = glyph_m;
+            for (uint8_t row = 0; row < g.height; row++) {
+                uint8_t bits = g.bitmap[row];
+                for (uint8_t col = 0; col < g.width; col++) {
+                    if (bits & (0x80 >> col)) {
+                        for (uint8_t dy = 0; dy < scale; dy++)
+                        for (uint8_t dx = 0; dx < scale; dx++)
+                            drawPixel_FAST(cx + col*scale + dx, y + row*scale + dy, color);
+                    }
+                }
+            }
+            cx += (g.width + 1) * scale;
+            text++;
+            continue;
+        }
+
         // ---- 7) Fallback skip ----
         cx += 2 * scale;
         text++;
@@ -230,6 +270,8 @@ int measureTextWidth(const char *text,
         if (c == 0xC2 && (unsigned char)*text == 0xB0) { px += (glyph_degree.width + 1) * scale; text++; continue; }
         if (c == 0xB0 || c == 0xF8) { px += (glyph_degree.width + 1) * scale; continue; }
         if (c == '/')      { px += (glyph_slash.width + 1) * scale; continue; }
+        if (c == '-')      { px += (glyph_hyphen.width + 1) * scale; continue; }
+        if (c == 'm')      { px += (glyph_m.width + 1) * scale; continue; }
         if (c == ' ')      { px += (font.glyphs[0].width + 1) * scale; continue; }
 
         if (c >= font.charFirst && c <= font.charLast) {

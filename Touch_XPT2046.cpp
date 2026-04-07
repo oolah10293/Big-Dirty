@@ -53,7 +53,5 @@ TouchPoint readTouch() {
 }
 
 bool touchPressed() {
-    // Page updates should only care whether a fresh press event is available
-    TouchPoint tp = readTouch();
-    return tp.touched;
+    return ts.touched();
 }

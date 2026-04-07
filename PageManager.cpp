@@ -48,7 +48,6 @@ void PageManager_begin()
     lastPageChangeTime = millis();
     if (pageBegin[currentPage]) pageBegin[currentPage]();
     Touch_reset();   // <<< ensures first page also starts with no "finger down"
-    blockingInputUntil = millis() + 200; // Block touch input briefly to avoid "switch during touch" ghost box
 
 }
 

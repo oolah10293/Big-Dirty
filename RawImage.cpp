@@ -11,8 +11,7 @@ static const size_t RAW_BUFFER_SIZE = 512;
 
 void drawRAW480x320(const char *filename)
 {
-    Serial.print("Opening raw: ");
-    Serial.println(filename);
+    delay(5);
 
     // Try to open the file from SD
     File f = SD.open(filename, FILE_READ);

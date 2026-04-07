@@ -1,7 +1,16 @@
 #pragma once
+#include <stdint.h>
 
-// Initialize overlay system (optional for future features)
+// Initialize overlay system
 void Overlay_Warnings_begin();
 
-// Draw all 5 warning icons in their positions (always ON for now)
-void Overlay_Warnings_update();
+// Update warning icon states
+// true  = show icon
+// false = hide icon
+void Overlay_Warnings_update(
+    bool seatbeltOn,
+    bool brakeOn,
+    bool highBeamOn,
+    bool checkEngineOn,
+    bool fourWdOn
+);
