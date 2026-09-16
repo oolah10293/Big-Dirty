@@ -178,18 +178,28 @@ See [docs/SENSORS_AND_INPUTS.md](docs/SENSORS_AND_INPUTS.md).
 
 ## SD card assets
 
-The firmware expects RAW RGB565 assets in the SD-card root. The binary assets are not currently present in this repository.
+The five 96x72 warning-icon RAW files have now been recovered exactly and are preserved in [sdcard/warning-icons-rgb565.zip](sdcard/warning-icons-rgb565.zip).
 
-Required by the current code:
+Their supplied metadata confirms:
 
-- /bowtie.raw — 480x320 boot image
-- brake.raw — 96x72
-- checkengine.raw — 96x72
-- highbeam.raw — 96x72
-- 4WD.raw — 96x72
-- seatbelt.raw — 96x72
+- RGB565
+- 16 bits per pixel
+- little-endian byte order
+- 13,824 bytes per icon
 
-See [sdcard/README.md](sdcard/README.md) before regenerating or replacing them.
+Recovered:
+
+- `brake.raw`
+- `checkengine.raw`
+- `highbeam.raw`
+- `4WD.raw`
+- `seatbelt.raw`
+
+Still missing:
+
+- `/bowtie.raw` — 480x320 boot image
+
+See [sdcard/README.md](sdcard/README.md) and [sdcard/WARNING_ASSET_MANIFEST.md](sdcard/WARNING_ASSET_MANIFEST.md).
 
 ## Building
 

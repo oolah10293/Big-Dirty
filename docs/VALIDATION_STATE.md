@@ -27,6 +27,19 @@ HC58 polling was validated first in standalone sketches. Four_PIDs_at_once.ino p
 
 Mode 03 read and Mode 04 clear were validated. P0102 was a successful real code-reading test.
 
+### Warning graphics
+
+The exact five 96x72 warning RAW assets have now been recovered.
+
+Each is:
+
+- RGB565
+- 16-bit
+- 13,824 bytes
+- little-endian
+
+This confirms the byte order used by `Overlay_Warnings.cpp`.
+
 ### Project-level status
 
 By later use, the cluster was largely functional. Remaining work was tweaks/cleanup rather than an unproven design.
@@ -72,17 +85,38 @@ INT is wired/configured, but the working application polls/drains FIFO. Interrup
 
 A screen wipe/redraw direction remained visually annoying in later use. It was left alone because the display otherwise worked.
 
-## RAW byte-order discrepancy
+## RAW byte order
 
-Warning-icon loader: low byte then high byte.
+### Warning icons — resolved
 
-Fullscreen RawImage loader: first byte named high, second low, despite comments calling the file little-endian.
+The recovered warning files include metadata explicitly identifying them as little-endian RGB565.
 
-The actual SD assets are the authority.
+`Overlay_Warnings.cpp` reads:
 
-## RAW assets missing from Git
+    low byte first
+    high byte second
 
-The firmware expects six RAW files, but they are not currently committed and were not found in the saved file library during this pass.
+which is correct for these recovered assets.
+
+### Boot logo — still unresolved
+
+`RawImage.cpp` names its first byte `hi` and second byte `lo`, despite comments calling the source little-endian.
+
+Because the original 480x320 `bowtie.raw` is still missing, the boot-logo path should remain unchanged until that exact asset is recovered.
+
+## Asset recovery state
+
+Recovered and preserved in `sdcard/warning-icons-rgb565.zip`:
+
+- `brake.raw`
+- `checkengine.raw`
+- `highbeam.raw`
+- `4WD.raw`
+- `seatbelt.raw`
+
+Still missing:
+
+- `bowtie.raw`
 
 ## Historical source is not current source
 
@@ -92,7 +126,6 @@ The March 2026 archived full-project text predates the April integrated build. I
 
 - DTC traffic-length heuristics
 - separate HC58 resets in PID vs DTC managers
-- fullscreen RAW endianness
+- fullscreen boot-logo RAW endianness
 - ENV sensor ownership
 - visible wipe direction
-- warning icon slot ordering against actual SD assets

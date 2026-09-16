@@ -2,48 +2,63 @@
 
 Big Dirty loads UI graphics from the Teensy 4.1 built-in SD card.
 
-The exact known-good binary assets were not recovered into this repository during the September 2026 documentation pass. Do not generate arbitrary replacements and assume they prove the byte order or color path.
+The five **warning-icon runtime assets have now been recovered exactly** and are preserved in [warning-icons-rgb565.zip](warning-icons-rgb565.zip). The only known missing runtime graphic is the original 480x320 boot logo, `/bowtie.raw`.
 
 ## Required files
 
-Current source expects these filenames in the SD-card root:
+Current source expects these filenames in the **SD-card root**:
 
-| File | Dimensions | Use |
-|---|---:|---|
-| bowtie.raw | 480x320 | boot logo |
-| brake.raw | 96x72 | brake warning |
-| checkengine.raw | 96x72 | check-engine warning |
-| highbeam.raw | 96x72 | high-beam indicator |
-| 4WD.raw | 96x72 | 4WD indicator |
-| seatbelt.raw | 96x72 | seat-belt warning |
+| File | Dimensions | Status | Use |
+|---|---:|---|---|
+| `bowtie.raw` | 480x320 | **not yet recovered** | boot logo |
+| `brake.raw` | 96x72 | recovered | brake warning |
+| `checkengine.raw` | 96x72 | recovered | check-engine warning |
+| `highbeam.raw` | 96x72 | recovered | high-beam indicator |
+| `4WD.raw` | 96x72 | recovered | 4WD indicator |
+| `seatbelt.raw` | 96x72 | recovered | seat-belt warning |
 
-## Pixel format
+To rebuild the SD card, extract the five `.raw` files from `warning-icons-rgb565.zip` directly into the SD-card root.
 
-The project uses 16-bit RGB565 with no image header.
+## Warning-icon format — confirmed
 
-Warning-icon loader behavior is explicitly low byte first, high byte second.
+The recovered metadata states:
 
-The fullscreen RawImage.cpp path currently reads the bytes in the opposite named order even though comments describe little-endian data. Because the working boot asset is missing from Git, do not change the loaders until an original working RAW file is available.
+- 96x72
+- RGB565
+- 16 bits per pixel
+- 13,824 bytes per file
+- **little-endian**
+
+This exactly matches the byte order used by `Overlay_Warnings.cpp`:
+
+    uint8_t lo = first byte;
+    uint8_t hi = second byte;
+    uint16_t color = (hi << 8) | lo;
+
+See [WARNING_ASSET_MANIFEST.md](WARNING_ASSET_MANIFEST.md) for SHA-256 hashes.
 
 ## Warning layout
 
-Current source places slots at X 0, 96, 192, 288, 384 and Y 242.
+Current `Overlay_Warnings.cpp` places the five 96-pixel-wide slots at:
 
-Mapping:
+- X 0
+- X 96
+- X 192
+- X 288
+- X 384
 
-- 0: brake.raw
-- 96: checkengine.raw
-- 192: highbeam.raw
-- 288: 4WD.raw
-- 384: seatbelt.raw
+with Y = 242.
 
-## When originals are recovered
+Current mapping:
 
-Commit them under this sdcard/ directory for preservation while keeping runtime copies in the SD-card root.
+- X 0: `brake.raw`
+- X 96: `checkengine.raw`
+- X 192: `highbeam.raw`
+- X 288: `4WD.raw`
+- X 384: `seatbelt.raw`
 
-Useful metadata to record:
+## Boot-logo byte order still unresolved
 
-- byte size
-- SHA-256
-- known display screenshot
-- confirmed byte order
+The warning path is now confirmed little-endian.
+
+The fullscreen `RawImage.cpp` path still names its first byte `hi` and second byte `lo`, while comments describe the source image as little-endian. The original `bowtie.raw` is still missing, so **do not change the boot loader yet**. The known-good boot image should be recovered first and treated as the authority.
