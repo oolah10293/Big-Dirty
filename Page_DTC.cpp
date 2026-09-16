@@ -150,22 +150,22 @@ static void drawListArea() {
     }
 
     if (state == DTC_STATE_NONE) {
-        drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "NO DTC CODES", AQUA, SCALE_EMPTY);
+        drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "NO DIAGNOSTIC CODES", AQUA, SCALE_EMPTY);
         return;
     }
 
     if (state == DTC_STATE_ERROR) {
-        drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "DTC READ ERROR", AQUA, SCALE_EMPTY);
+        drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "CODE READ ERROR", AQUA, SCALE_EMPTY);
         return;
     }
 
     if (state == DTC_STATE_REQUEST_ERROR) {
-        drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "DTC REQUEST ERROR", AQUA, SCALE_EMPTY);
+        drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "CODE REQUEST ERROR", AQUA, SCALE_EMPTY);
         return;
     }
 
     // UNREAD / READING / CLEARING all show placeholder
-    drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "--- DTC CODES", AQUA, SCALE_EMPTY);
+    drawCenteredMixedLine(((LIST_Y0 + LIST_Y1) / 2) - 10, "SCANNING CODES", AQUA, SCALE_EMPTY);
 }
 
 // ===== Draw button =====

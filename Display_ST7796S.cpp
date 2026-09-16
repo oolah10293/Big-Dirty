@@ -2,6 +2,7 @@
 #include "PinConfig.h"
 #include "PageManager.h"
 #include <SPI.h>
+#include <math.h>
 
 // ===== Private SPI write helpers =====
 static void wr_cmd(uint8_t c) {
@@ -33,7 +34,16 @@ static const float ADC_COUNTS              = 4095.0f;
 
 static bool dimmerHasTakenControl = false;
 
-// ===== Display init (known-good from loader) =====
+static inline void displaySPI_begin() {
+    digitalWrite(T_CS, HIGH);  // keep touch deselected while display owns SPI
+    SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE3));
+}
+
+static inline void displaySPI_end() {
+    SPI.endTransaction();
+}
+
+// ===== Display init =====
 void initDisplay() {
     pinMode(TFT_CS,  OUTPUT);
     pinMode(TFT_DC,  OUTPUT);
@@ -47,8 +57,8 @@ void initDisplay() {
     digitalWrite(TFT_LED, LOW);
 
     SPI.begin();
-    
-    SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE3));
+
+    displaySPI_begin();
 
     // Hardware reset
     digitalWrite(TFT_RST, LOW);
@@ -72,16 +82,12 @@ void initDisplay() {
     wr_cmd(0x2B); wr_dat16(0); wr_dat16(319);
     wr_cmd(0x2C);
 
-    SPI.endTransaction();
-
+    displaySPI_end();
 }
 
 // ===== Set drawing window =====
+// IMPORTANT: caller must already own the SPI transaction.
 void setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-    SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE3));
-
-    digitalWrite(T_CS, HIGH);
-
     wr_cmd(0x2A);
     wr_dat16(x0);
     wr_dat16(x1);
@@ -91,26 +97,23 @@ void setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
     wr_dat16(y1);
 
     wr_cmd(0x2C);
-
-    SPI.endTransaction();
 }
 
 // ===== Draw single pixel =====
 void drawPixel_FAST(int x, int y, uint16_t color) {
     if (x < 0 || x >= 480 || y < 0 || y >= 320) return;
 
-    SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE3));
+    displaySPI_begin();
 
-    setAddrWindow(x, y, x, y);
+    setAddrWindow((uint16_t)x, (uint16_t)y, (uint16_t)x, (uint16_t)y);
     wr_dat16(color);
 
-    SPI.endTransaction();
+    displaySPI_end();
 }
 
-// ===== FULL, INSTANT SCREEN FILL (NO WIPE) =====
+// ===== FULL SCREEN FILL =====
 void fillScreen_FAST(uint16_t color) {
-
-    SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE3));
+    displaySPI_begin();
 
     setAddrWindow(0, 0, 479, 319);
 
@@ -128,7 +131,10 @@ void fillScreen_FAST(uint16_t color) {
 
     digitalWrite(TFT_CS, HIGH);
 
-    SPI.endTransaction();
+    // restore default full-screen window
+    setAddrWindow(0, 0, 479, 319);
+
+    displaySPI_end();
 }
 
 // ===== FAST RECTANGLE FILL =====
@@ -143,13 +149,12 @@ void fillRect_FAST(int x0, int y0, int x1, int y1, uint16_t color) {
     if (x1 > 479) x1 = 479;
     if (y1 > 319) y1 = 319;
 
-    SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE3));
+    displaySPI_begin();
 
     setAddrWindow((uint16_t)x0, (uint16_t)y0, (uint16_t)x1, (uint16_t)y1);
 
     uint8_t hi = color >> 8;
     uint8_t lo = color & 0xFF;
-
     uint32_t total = (uint32_t)(x1 - x0 + 1) * (uint32_t)(y1 - y0 + 1);
 
     digitalWrite(TFT_DC, HIGH);
@@ -160,9 +165,12 @@ void fillRect_FAST(int x0, int y0, int x1, int y1, uint16_t color) {
         SPI.transfer(lo);
     }
 
-    setAddrWindow(0, 0, 479, 319);
     digitalWrite(TFT_CS, HIGH);
-    SPI.endTransaction();
+
+    // restore default full-screen window
+    setAddrWindow(0, 0, 479, 319);
+
+    displaySPI_end();
 }
 
 // ===== LED Backlight PWM (0–255) =====
@@ -177,7 +185,7 @@ void backlightControl_init() {
     analogWriteResolution(8);
     analogWriteFrequency(TFT_LED, 20000);
 
-    analogWrite(TFT_LED, 0);   // make sure PWM starts dark
+    analogWrite(TFT_LED, 0);
     dimmerHasTakenControl = false;
 }
 
@@ -190,32 +198,28 @@ void backlightControl_update() {
 
     int raw = analogRead(DIMMER_SENSE);
 
-    // ADC pin voltage (0-3.3V expected on pin 20)
+    // ADC pin voltage
     float pinVoltage = ((float)raw * ADC_REF_V) / ADC_COUNTS;
 
-    // Undo 38.1k / 11.87k divider to estimate source/rheostat voltage
-    float sourceVoltage = pinVoltage * ((DIMMER_DIVIDER_R_TOP + DIMMER_DIVIDER_R_BOTTOM) / DIMMER_DIVIDER_R_BOTTOM);
+    // Undo divider to estimate source voltage
+    float sourceVoltage =
+        pinVoltage * ((DIMMER_DIVIDER_R_TOP + DIMMER_DIVIDER_R_BOTTOM) / DIMMER_DIVIDER_R_BOTTOM);
 
     uint8_t pwm = 255;
 
     if (sourceVoltage < DIMMER_MIN_V || sourceVoltage > DIMMER_MAX_V) {
-        pwm = 255;   // below 1V or above 13V = full bright
+        pwm = 255;
     } else {
         float t = (sourceVoltage - DIMMER_MIN_V) / (DIMMER_MAX_V - DIMMER_MIN_V);
         float curved = powf(t, 4.0f);
         int value = (int)(curved * 255.0f + 0.5f);
 
-        if (value < 0)   value = 0;
+        if (value < 0) value = 0;
         if (value > 255) value = 255;
 
         pwm = (uint8_t)value;
     }
 
-    // Force one clean handoff write after boot page exits.
-    if (!dimmerHasTakenControl) {
-        setBacklightPWM(pwm);
-        dimmerHasTakenControl = true;
-    } else {
-        setBacklightPWM(pwm);
-    }
+    analogWrite(TFT_LED, pwm);
+    dimmerHasTakenControl = true;
 }

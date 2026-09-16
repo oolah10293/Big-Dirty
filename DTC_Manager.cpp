@@ -24,13 +24,13 @@ static const uint32_t CS_HOLD_US  = 40;
 // ============================================================
 // Timing
 // ============================================================
-static const uint32_t POSTTX_US              = 8300;
-static const uint32_t EOD_US                 = 750;
-static const uint32_t DRAIN_MS_MODE03        = 800;
-static const uint32_t DRAIN_MS_CLEAR         = 400;
-static const uint32_t PRETX_HUSH_MODE03_MS   = 250;
-static const uint32_t POST_CLEAR_DELAY_MS    = 250;
-static const uint32_t CLEAR_LISTEN_TOTAL_MS  = 5000;
+static const uint32_t POSTTX_US             = 8300;
+static const uint32_t EOD_US                = 750;
+static const uint32_t DRAIN_MS_READ         = 800;
+static const uint32_t DRAIN_MS_CLEAR        = 400;
+static const uint32_t PRETX_HUSH_READ_MS    = 250;
+static const uint32_t POST_CLEAR_DELAY_MS   = 250;
+static const uint32_t CLEAR_LISTEN_TOTAL_MS = 5000;
 
 // ============================================================
 // Traffic heuristics for no-code detection
@@ -44,6 +44,7 @@ static const int TRAFFIC_NONE_MIN  = 50;   // 50+   -> alive/no codes
 static DTCState dtcState = DTC_STATE_UNREAD;
 
 static const int MAX_CODES = 8;
+static char rawDtcList[MAX_CODES][8];
 static char dtcList[MAX_CODES][48];
 static int dtcCount = 0;
 
@@ -127,6 +128,7 @@ static const int kKnownDTCCount = sizeof(kKnownDTCs) / sizeof(kKnownDTCs[0]);
 // ============================================================
 static void clearLocalCodes() {
     for (int i = 0; i < MAX_CODES; i++) {
+        rawDtcList[i][0] = '\0';
         dtcList[i][0] = '\0';
     }
     dtcCount = 0;
@@ -153,6 +155,35 @@ static void buildDisplayDTC(const char* rawCode, char* out, size_t outSize) {
     } else {
         snprintf(out, outSize, "%s", rawCode);
     }
+}
+
+static bool hasRawCode(const char* rawCode) {
+    if (!rawCode || !rawCode[0]) return false;
+
+    for (int i = 0; i < dtcCount; i++) {
+        if (strcmp(rawDtcList[i], rawCode) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool addDTCUnique(const char* rawCode) {
+    if (!rawCode || !rawCode[0]) return false;
+
+    if (hasRawCode(rawCode)) {
+        return true;
+    }
+
+    if (dtcCount >= MAX_CODES) {
+        return true; // silently cap list
+    }
+
+    snprintf(rawDtcList[dtcCount], sizeof(rawDtcList[dtcCount]), "%s", rawCode);
+    buildDisplayDTC(rawCode, dtcList[dtcCount], sizeof(dtcList[dtcCount]));
+    dtcCount++;
+    return true;
 }
 
 static void SPIcycle(uint8_t cmd, uint8_t data, uint8_t &status, uint8_t &resp) {
@@ -203,14 +234,22 @@ static void sendHeader_Functional() {
     SPIcycle(0xF1, 0x04, s, d);
 }
 
-static void send03() {
+static void sendReadService(uint8_t service) {
     uint8_t s, d;
 
-    delay(PRETX_HUSH_MODE03_MS);
+    delay(PRETX_HUSH_READ_MS);
     sendHeader_Functional();
 
-    SPIcycle(0x03, 0x0C, s, d);
-    SPIcycle(0x00, 0x0C, s, d);
+    SPIcycle(service, 0x0C, s, d);
+    SPIcycle(0x00,   0x0C, s, d);
+}
+
+static void send03() {
+    sendReadService(0x03);
+}
+
+static void send07() {
+    sendReadService(0x07);
 }
 
 static void send04() {
@@ -238,14 +277,15 @@ static int drain(unsigned winMs) {
     return rxLen;
 }
 
-static bool findPositiveReply03(int &idx) {
+static bool findPositiveReply(uint8_t service, int &idx) {
     idx = -1;
+    uint8_t positiveSid = (uint8_t)(service + 0x40);
 
     for (int i = 0; i < rxLen - 4; i++) {
         if (rx[i]     == 0x48 &&
             rx[i + 1] == 0x6B &&
             rx[i + 2] == 0x10 &&
-            rx[i + 3] == 0x43) {
+            rx[i + 3] == positiveSid) {
             idx = i;
             return true;
         }
@@ -254,7 +294,7 @@ static bool findPositiveReply03(int &idx) {
     return false;
 }
 
-static bool findNegativeReply03(int &idx, uint8_t &reason) {
+static bool findNegativeReply(uint8_t service, int &idx, uint8_t &reason) {
     idx = -1;
     reason = 0x00;
 
@@ -263,7 +303,7 @@ static bool findNegativeReply03(int &idx, uint8_t &reason) {
             rx[i + 1] == 0x6B &&
             rx[i + 2] == 0x10 &&
             rx[i + 3] == 0x7F &&
-            rx[i + 4] == 0x03) {
+            rx[i + 4] == service) {
 
             idx = i;
             reason = rx[i + 5];
@@ -289,18 +329,14 @@ static bool formatRawDTC(uint8_t hi, uint8_t lo, char *out, size_t outSize) {
     return true;
 }
 
-static bool decodeStoredDTCsFromReply(int startIdx) {
-    clearLocalCodes();
-
-    // Expected PCM format:
-    // 48 6B 10 43 A B C D 00 00 ...
+static bool decodeDTCsFromReply(int startIdx) {
     int firstPair = startIdx + 4;
 
     if (firstPair >= rxLen) {
         return false;
     }
 
-    for (int i = firstPair; i + 1 < rxLen && dtcCount < MAX_CODES; i += 2) {
+    for (int i = firstPair; i + 1 < rxLen; i += 2) {
         uint8_t hi = rx[i];
         uint8_t lo = rx[i + 1];
 
@@ -313,52 +349,95 @@ static bool decodeStoredDTCsFromReply(int startIdx) {
             return false;
         }
 
-        buildDisplayDTC(rawCode, dtcList[dtcCount], sizeof(dtcList[dtcCount]));
-        dtcCount++;
+        if (!addDTCUnique(rawCode)) {
+            return false;
+        }
     }
 
     return true;
 }
 
-static int performMode03Read() {
-    send03();
+struct ReadAttemptResult {
+    int len;
+    bool positive;
+    bool negative;
+};
+
+static ReadAttemptResult performReadAndMerge(uint8_t service) {
+    ReadAttemptResult r;
+    r.len = 0;
+    r.positive = false;
+    r.negative = false;
+
+    if (service == 0x03) {
+        send03();
+    } else {
+        send07();
+    }
+
     delayMicroseconds(POSTTX_US + EOD_US);
-    return drain(DRAIN_MS_MODE03);
+    r.len = drain(DRAIN_MS_READ);
+
+    int negIdx = -1;
+    uint8_t negReason = 0x00;
+    if (findNegativeReply(service, negIdx, negReason)) {
+        r.negative = true;
+    }
+
+    int posIdx = -1;
+    if (findPositiveReply(service, posIdx)) {
+        r.positive = true;
+        if (!decodeDTCsFromReply(posIdx)) {
+            r.negative = false;
+            r.positive = false;
+            r.len = -1;
+        }
+    }
+
+    return r;
 }
 
-static bool classifyNoPositiveNoNegativeInitial(int firstLen) {
-    if (firstLen >= TRAFFIC_NONE_MIN) {
+static bool classifyNoRepliesInitial(int len03, int len07) {
+    int bestLen = (len03 > len07) ? len03 : len07;
+
+    if (bestLen >= TRAFFIC_NONE_MIN) {
         dtcState = DTC_STATE_NONE;
         return true;
     }
 
-    if (firstLen <= TRAFFIC_ERROR_MAX) {
+    if (len03 <= TRAFFIC_ERROR_MAX && len07 <= TRAFFIC_ERROR_MAX) {
         dtcState = DTC_STATE_ERROR;
         return false;
     }
 
-    // 21-49: ambiguous -> rescan once
-    int secondLen = performMode03Read();
+    clearLocalCodes();
 
-    int negIdx = -1;
-    uint8_t negReason = 0x00;
-    if (findNegativeReply03(negIdx, negReason)) {
+    ReadAttemptResult r03 = performReadAndMerge(0x03);
+    if (r03.len < 0) {
+        dtcState = DTC_STATE_ERROR;
+        return false;
+    }
+
+    ReadAttemptResult r07 = performReadAndMerge(0x07);
+    if (r07.len < 0) {
+        dtcState = DTC_STATE_ERROR;
+        return false;
+    }
+
+    if (dtcCount > 0) {
+        dtcState = DTC_STATE_PRESENT;
+        return true;
+    }
+
+    if (r03.negative || r07.negative) {
         dtcState = DTC_STATE_REQUEST_ERROR;
         return false;
     }
 
-    int posIdx = -1;
-    if (findPositiveReply03(posIdx)) {
-        if (!decodeStoredDTCsFromReply(posIdx)) {
-            dtcState = DTC_STATE_ERROR;
-            return false;
-        }
+    int bestLen2 = r03.len;
+    if (r07.len > bestLen2) bestLen2 = r07.len;
 
-        dtcState = (dtcCount > 0) ? DTC_STATE_PRESENT : DTC_STATE_NONE;
-        return (dtcState != DTC_STATE_ERROR);
-    }
-
-    if (secondLen >= TRAFFIC_NONE_MIN) {
+    if (bestLen2 >= TRAFFIC_NONE_MIN) {
         dtcState = DTC_STATE_NONE;
         return true;
     }
@@ -367,8 +446,10 @@ static bool classifyNoPositiveNoNegativeInitial(int firstLen) {
     return false;
 }
 
-static bool classifyNoPositiveNoNegativePostClear(int firstLen) {
-    if (firstLen >= TRAFFIC_ERROR_MAX + 1) {
+static bool classifyNoRepliesPostClear(int len03, int len07) {
+    int bestLen = (len03 > len07) ? len03 : len07;
+
+    if (bestLen >= (TRAFFIC_ERROR_MAX + 1)) {
         dtcState = DTC_STATE_NONE;
         return true;
     }
@@ -377,7 +458,7 @@ static bool classifyNoPositiveNoNegativePostClear(int firstLen) {
     return false;
 }
 
-static bool doMode03Read() {
+static bool doCombinedRead() {
     if (!hc58Ready) {
         hc58_beginIfNeeded();
         if (!hc58Ready) {
@@ -386,42 +467,43 @@ static bool doMode03Read() {
         }
     }
 
-    int firstLen = performMode03Read();
+    clearLocalCodes();
 
-    // Bus totally dead
-    if (firstLen <= 0) {
+    ReadAttemptResult r03 = performReadAndMerge(0x03);
+    if (r03.len < 0) {
         clearLocalCodes();
         dtcState = DTC_STATE_ERROR;
         return false;
     }
 
-    int negIdx = -1;
-    uint8_t negReason = 0x00;
-    if (findNegativeReply03(negIdx, negReason)) {
+    ReadAttemptResult r07 = performReadAndMerge(0x07);
+    if (r07.len < 0) {
         clearLocalCodes();
+        dtcState = DTC_STATE_ERROR;
+        return false;
+    }
+
+    if (r03.len <= 0 && r07.len <= 0) {
+        clearLocalCodes();
+        dtcState = DTC_STATE_ERROR;
+        return false;
+    }
+
+    if (dtcCount > 0) {
+        dtcState = DTC_STATE_PRESENT;
+        return true;
+    }
+
+    if (r03.negative || r07.negative) {
         dtcState = DTC_STATE_REQUEST_ERROR;
         return false;
     }
 
-    int posIdx = -1;
-    if (findPositiveReply03(posIdx)) {
-        if (!decodeStoredDTCsFromReply(posIdx)) {
-            clearLocalCodes();
-            dtcState = DTC_STATE_ERROR;
-            return false;
-        }
-
-        dtcState = (dtcCount > 0) ? DTC_STATE_PRESENT : DTC_STATE_NONE;
-        return true;
-    }
-
-    clearLocalCodes();
-
     if (postClearRead) {
-        return classifyNoPositiveNoNegativePostClear(firstLen);
+        return classifyNoRepliesPostClear(r03.len, r07.len);
     }
 
-    return classifyNoPositiveNoNegativeInitial(firstLen);
+    return classifyNoRepliesInitial(r03.len, r07.len);
 }
 
 static void doMode04ClearThenReread() {
@@ -445,7 +527,7 @@ static void doMode04ClearThenReread() {
     delay(POST_CLEAR_DELAY_MS);
 
     postClearRead = true;
-    doMode03Read();
+    doCombinedRead();
     postClearRead = false;
 }
 
@@ -489,7 +571,7 @@ void DTCManager_update() {
         }
 
         readPending = false;
-        doMode03Read();
+        doCombinedRead();
         return;
     }
 

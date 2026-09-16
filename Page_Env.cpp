@@ -18,6 +18,7 @@ static bool envDrawn = false;
 // DHT20
 static DHT20 dht;
 static bool dhtReady = false;
+static bool dhtGaveUp = false;
 static uint32_t lastDhtReadMs = 0;
 static const uint32_t DHT_READ_INTERVAL_MS = 1000;
 
@@ -25,7 +26,7 @@ static const uint32_t DHT_READ_INTERVAL_MS = 1000;
 static bool analogReady = false;
 static uint32_t lastTransReadMs = 0;
 static uint32_t lastCurrentReadMs = 0;
-static const uint32_t TRANS_READ_INTERVAL_MS   = 250;
+static const uint32_t TRANS_READ_INTERVAL_MS   = 1500;
 static const uint32_t CURRENT_READ_INTERVAL_MS = 250;
 
 // Trans temp pins
@@ -129,6 +130,8 @@ static int getTotalBlockWidth(
     int unitW  = measureTextWidth(unit, fontUnit, scaleUnit);
     return valueW + (unitW > 0 ? (digitW / 2) : 0) + unitW;
 }
+
+static int dhtFailCount = 0; 
 
 static void clearValueUnitBlock(
     int x0, int x1, int y0,
@@ -277,7 +280,7 @@ static bool readTransTempF(float &tempFOut) {
     float vNode = (float)rawSensor * voltsPerCount;
 
     if (vNode <= 0.001f) return false;
-    if (vNode >= (TRANS_PULLUP_VOLTS - 0.001f)) return false;
+    if (vNode >= (TRANS_PULLUP_VOLTS - 0.010f)) return false;
 
     float rSensor = TRANS_PULLUP_OHMS * vNode / (TRANS_PULLUP_VOLTS - vNode);
     if (rSensor <= 0.0f) return false;
@@ -299,7 +302,15 @@ static bool readCurrentAmps(float &ampsOut) {
     int rawVref = analogRead(CT_VREF_PIN);
     int rawVout = analogRead(CT_VOUT_PIN);
 
-    if (rawMcp <= 0) return false;
+    // 1. Reference IC Check (The 2.5V calibration source)
+    if (rawMcp < 500) return false;
+
+    // 2. CT Hardware Fault Check
+    // If Vref is outside 2.0V - 3.0V, the sensor is unplugged or failing.
+    // 2482 counts = ~2.0V | 3723 counts = ~3.0V
+    if (rawVref < 2482 || rawVref > 3723) {
+        return false; 
+    }
 
     float voltsPerCount = MCP1525_VOLTS / (float)rawMcp;
     float vref = (float)rawVref * voltsPerCount;
@@ -309,6 +320,7 @@ static bool readCurrentAmps(float &ampsOut) {
     float amps = (-deltaV / CT_SENSITIVITY_V_PER_A);
     amps = (amps * CT_GAIN) + CT_BIAS_A;
 
+    // Filter out low-level noise for a clean 0 display
     if (fabsf(amps) < 2.0f) amps = 0.0f;
     if (amps < 0.0f) amps = 0.0f;
 
@@ -316,29 +328,45 @@ static bool readCurrentAmps(float &ampsOut) {
     return true;
 }
 
-static void updateDht20Readings() {
-    if (!dhtReady) return;
+static void updateDhtReadings() {
+    // If we already officially gave up for this page visit, stay silent
+    if (!dhtReady || dhtGaveUp) return;
 
     uint32_t now = millis();
-    if ((now - lastDhtReadMs) < DHT_READ_INTERVAL_MS) return;
+    if ((now - lastDhtReadMs) < DHT_READ_INTERVAL_MS) return; 
     lastDhtReadMs = now;
 
     int status = dht.read();
-    if (status != DHT20_OK) return;
+    
+    if (status == DHT20_OK) {
+        dhtFailCount = 0; 
+        
+        float tempF = (dht.getTemperature() * 1.8f) + 32.0f;
+        float humRH = dht.getHumidity();
 
-    float tempF = (dht.getTemperature() * 1.8f) + 32.0f;
-    float humRH = dht.getHumidity();
+        int tempWhole = (int)lroundf(tempF);
+        int humWhole  = (int)lroundf(humRH);
 
-    int tempWhole = (int)lroundf(tempF);
-    int humWhole  = (int)lroundf(humRH);
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", tempWhole);
+        Page_Env_setQ1Value(buf);
 
-    char buf[8];
-
-    snprintf(buf, sizeof(buf), "%d", tempWhole);
-    Page_Env_setQ1Value(buf);
-
-    snprintf(buf, sizeof(buf), "%d", humWhole);
-    Page_Env_setQ2Value(buf);
+        snprintf(buf, sizeof(buf), "%d", humWhole);
+        Page_Env_setQ2Value(buf);
+        } else {
+        dhtFailCount++;
+        
+        if (dhtFailCount >= 3) {
+            // 1. Set the flag so we stop polling I2C (prevents UI lag)
+            dhtGaveUp = true; 
+            
+            // 2. IMMEDIATELY push the dashes to the screen
+            Page_Env_setQ1Value("---");
+            Page_Env_setQ2Value("---");
+            
+            Serial.println("DHT20 Lost: Screen updated to ---");
+        }
+    }
 }
 
 static void updateCurrentReadings() {
@@ -349,16 +377,19 @@ static void updateCurrentReadings() {
     lastCurrentReadMs = now;
 
     float amps = 0.0f;
-    if (!readCurrentAmps(amps)) return;
+    if (readCurrentAmps(amps)) {
+        int ampsWhole = (int)lroundf(amps);
 
-    int ampsWhole = (int)lroundf(amps);
+        if (ampsWhole < 0) ampsWhole = 0;
+        if (ampsWhole > 999) ampsWhole = 999;
 
-    if (ampsWhole < 0) ampsWhole = 0;
-    if (ampsWhole > 999) ampsWhole = 999;
-
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", ampsWhole);
-    Page_Env_setQ3Value(buf);
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", ampsWhole);
+        Page_Env_setQ3Value(buf);
+    } else {
+        // If the 2.5V reference or ADC read fails, show no-data
+        Page_Env_setQ3Value("---");
+    }
 }
 
 static void updateTransTempReadings() {
@@ -369,17 +400,30 @@ static void updateTransTempReadings() {
     lastTransReadMs = now;
 
     float tempF = 0.0f;
-    if (!readTransTempF(tempF)) return;
+    if (readTransTempF(tempF)) {
+        int tempWhole = (int)lroundf(tempF);
 
-    int tempWhole = (int)lroundf(tempF);
-
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%d", tempWhole);
-    Page_Env_setQ4Value(buf);
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", tempWhole);
+        Page_Env_setQ4Value(buf);
+    } else {
+        // If reading fails (open circuit or bad ref), show no-data
+        Page_Env_setQ4Value("---");
+    }
 }
 
 void Page_Env_begin() {
     envDrawn = false;
+    dhtGaveUp = false; // Reset so we try one more time on entry
+    
+    // Force immediate updates on first loop
+    lastTransReadMs = 0;
+    lastCurrentReadMs = 0;
+    lastDhtReadMs = 0;
+    
+    // Reset flags to ensure fresh hardware config
+    dhtReady = false;
+    analogReady = false;
 
     copyValue(q1Value, "---", sizeof(q1Value));
     copyValue(q2Value, "---", sizeof(q2Value));
@@ -391,8 +435,9 @@ void Page_Env_begin() {
 
     if (!dhtReady) {
         Wire.begin();
+        Wire.setTimeout(1000); // 1ms timeout prevents UI lockup if sensor is missing
         dht.begin();
-        dhtReady = true;
+        dhtReady = true; 
     }
 
     if (!analogReady) {
@@ -416,7 +461,7 @@ void Page_Env_update() {
         return;
     }
 
-    updateDht20Readings();
+    updateDhtReadings();
     updateCurrentReadings();
     updateTransTempReadings();
 }
