@@ -2,7 +2,7 @@
 
 ## Display baseline
 
-Current ST7796S initialization:
+Final Save 14 ST7796S initialization:
 
 - SPI 16 MHz
 - MSB first
@@ -15,15 +15,32 @@ Current ST7796S initialization:
 
 Treat this as a known-good baseline.
 
+## SPI transaction ownership in Save 14
+
+`Display_ST7796S.cpp` now has explicit helpers:
+
+- `displaySPI_begin()`
+- `displaySPI_end()`
+
+The begin helper forces the touch controller CS high before opening the display SPI transaction.
+
+`setAddrWindow()` assumes the caller already owns the transaction. It no longer opens/closes its own nested SPI transaction.
+
+`drawPixel_FAST()`, `fillScreen_FAST()`, and `fillRect_FAST()` each own one complete transaction around the operation.
+
+The fill routines restore the default full-screen address window before ending.
+
+This is a meaningful final-version cleanup compared with the older April source.
+
 ## Drawing primitives
 
-Display_ST7796S.cpp provides setAddrWindow(), drawPixel_FAST(), fillScreen_FAST(), fillRect_FAST(), setBacklightPWM(), and dimmer/backlight update functions.
+`Display_ST7796S.cpp` provides `setAddrWindow()`, `drawPixel_FAST()`, `fillScreen_FAST()`, `fillRect_FAST()`, `setBacklightPWM()`, and dimmer/backlight update functions.
 
 The UI stays practical without a framebuffer by repainting only changed regions.
 
 ## Fonts
 
-Display_Fonts.cpp contains project-specific 5x7 digits, uppercase letters, percent, degree, slash, and mixed value/unit helpers.
+`Display_Fonts.cpp` contains project-specific 5x7 digits, uppercase letters, percent, degree, slash, and mixed value/unit helpers.
 
 ## Page map
 
@@ -44,7 +61,7 @@ Boot:
 
 - starts dark
 - clears black
-- reveals /bowtie.raw
+- reveals `/bowtie.raw`
 - waits roughly 3 seconds unless touched
 - fades 32 steps at 25 ms/step
 - switches to ENV
@@ -65,7 +82,7 @@ XPT2046:
 - raw calibration 200..3800
 - screen map 480x320
 
-readTouch() is edge-triggered. PageManager resets the edge detector and adds transition blocking/debounce to prevent one press from skipping pages.
+`readTouch()` is edge-triggered. PageManager resets the edge detector and adds transition blocking/debounce to prevent one press from skipping pages.
 
 ## Common quadrant layout
 
@@ -74,6 +91,17 @@ readTouch() is edge-triggered. PageManager resets the edge detector and adds tra
 - top Y about 10..119
 - bottom Y about 120..230
 - warning strip begins around Y 242
+
+## DTC page wording
+
+Final Save 14 status text:
+
+- SCANNING CODES
+- NO DIAGNOSTIC CODES
+- CODE READ ERROR
+- CODE REQUEST ERROR
+
+The DTC list can contain merged Mode 03 stored and Mode 07 pending codes.
 
 ## Warning overlay
 
@@ -91,15 +119,15 @@ Current source maps:
 
 The overlay caches previous states and redraws only changed slots.
 
-## RAW byte-order warning
+The recovered warning assets confirm low-byte-first little-endian RGB565.
 
-Current tree contains an inconsistency:
+## Boot RAW byte-order uncertainty
 
-- Overlay_Warnings.cpp reads low byte then high byte.
-- RawImage.cpp names the first byte high and second low.
-- RawImage comments describe little-endian data.
+The warning-loader byte order is resolved.
 
-Verify the actual working RAW assets before changing either loader.
+The only remaining RAW-format uncertainty is the fullscreen boot path: `RawImage.cpp` names its first byte high and second low while its comments describe little-endian input.
+
+Do not change it until the original working `bowtie.raw` is recovered.
 
 ## Known visual issue
 

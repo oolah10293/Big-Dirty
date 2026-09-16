@@ -1,37 +1,45 @@
 # Roadmap
 
-Big Dirty is already a substantially functional project. The roadmap is mostly preservation, verification, and targeted cleanup rather than feature expansion.
+Big Dirty now has its authoritative final firmware, Save 14. The roadmap is therefore preservation, verification, and optional targeted cleanup—not reconstruction of missing application code.
 
-## Preserve the actual latest working state
+## Preserve Save 14
 
-- Keep the 2026-04-07 GitHub snapshot as a known checkpoint.
-- If a newer exact working sketch is recovered from the programming PC, compare it file-by-file before replacing anything.
-- Preserve recovered SD-card RAW assets once their exact working versions are found.
+- Treat the current root source as the final firmware baseline.
+- Keep the 2026-04-07 and March 2026 states available through history rather than overwriting them.
+- Use `history/FINAL_SAVE_14_MANIFEST.md` to verify source provenance.
 
-## Move ENV acquisition out of Page_Env
+## Recover the last missing SD asset
 
-Target:
+Still missing:
 
-    acquisition -> cached sensor state -> display page
+- `bowtie.raw` — 480x320 boot image
 
-The current source still reads DHT20 and analog sensors from Page_Env.cpp. Migrate only with hardware testing rather than recreating missing code from memory.
+The five warning icons are already recovered and preserved.
 
-## Unify HC58 transport ownership
+When `bowtie.raw` is found:
 
-PID_Manager.cpp and DTC_Manager.cpp each contain their own HC58 initialization, SPI cycle, and timing code.
+1. preserve the exact file
+2. record byte size and SHA-256
+3. verify its byte order against `RawImage.cpp`
+4. update the boot-loader documentation only after that evidence exists
 
-A shared transport module could reduce duplication, but only after capturing current live-PID and DTC read/clear behavior.
+## Optional ENV architecture cleanup
 
-## Asset preservation
+Final Save 14 still uses:
 
-Recover and commit the exact known-good SD files:
+    Page_Env acquisition + rendering
 
-- bowtie.raw
-- brake.raw
-- checkengine.raw
-- highbeam.raw
-- 4WD.raw
-- seatbelt.raw
+Possible future structure:
+
+    acquisition -> cached sensor state -> rendering
+
+Only do this as a new tested revision. It is not needed to complete recovery of the final source.
+
+## Optional HC58 transport unification
+
+`PID_Manager.cpp` and `DTC_Manager.cpp` each contain HC58 initialization, SPI cycle, and timing code.
+
+A shared transport module could reduce duplication, but only after capturing current live-PID and Mode 03/07/04 behavior.
 
 ## Known visual issue
 
@@ -39,28 +47,18 @@ The display has had an undesirable wipe/redraw direction in some transitions. It
 
 Only revisit this with a small isolated display test.
 
-## RAW byte-order cleanup
+## Boot RAW byte-order cleanup
 
-Current warning icons are read low-byte then high-byte. The fullscreen RawImage loader names the first byte high while its comments describe little-endian data.
+Warning-icon byte order is now proven little-endian.
 
-Resolve this against the actual working RAW assets before changing code.
-
-## Optional diagnostic expansion
-
-Mode 07 pending-code behavior was validated during earlier HC58 work. The integrated DTC UI currently uses Mode 03 stored codes and Mode 04 clear only.
-
-Possible future work:
-
-- add Mode 07 pending-code display
-- preserve separate stored vs pending status
-- expand the curated code-description table only as useful
+The remaining uncertainty is only `RawImage.cpp` versus the missing `bowtie.raw`. Do not infer the boot asset format from the warning assets and change known-working code without the original logo file.
 
 ## Lower-priority cleanup
 
-After the working hardware state is backed up:
+After the final hardware state is backed up:
 
 - centralize repeated UI quadrant helpers
-- centralize HC58 constants
+- centralize HC58 constants if testing supports it
 - add explicit sensor-state structures
 - record exact library versions from the build PC
 - add a repeatable hardware regression checklist

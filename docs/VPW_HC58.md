@@ -28,7 +28,7 @@ Established sequence:
     12 / 1A   CCR-first
     10 / C0   RENA + TENA
 
-PID_Manager uses reset low 500 ms/high 5 ms. DTC_Manager currently uses 40 ms low/120 ms high. Preserve that difference until tested.
+PID_Manager uses reset low 500 ms/high 5 ms. DTC_Manager in final Save 14 uses 40 ms low/120 ms high. Preserve that difference until tested.
 
 ## Functional Mode 01 request
 
@@ -40,7 +40,7 @@ and searches for PCM replies beginning:
 
     48 6B 10 41 PID
 
-## Integrated capture timing
+## Integrated live-PID capture timing
 
 | Parameter | Value |
 |---|---:|
@@ -54,7 +54,7 @@ RX is drained until traffic is quiet long enough or the capture window expires.
 
 ## Original golden Uno timing
 
-Four_PIDs_at_once.ino records Build_2025-10-19m_GoldenTiming_4PID_InsightLogger:
+`Four_PIDs_at_once.ino` records Build_2025-10-19m_GoldenTiming_4PID_InsightLogger:
 
 | Parameter | Value |
 |---|---:|
@@ -88,14 +88,17 @@ PID1 intentionally polls TPS more frequently. PID2 favors timing/load. PID3 roun
 
 The INT signal exists but the integrated application does not use interrupt-driven RX. FIFO polling/draining is the established working behavior.
 
-## Diagnostic modes
+## Final diagnostic modes
 
-Integrated UI:
+Save 14 integrates:
 
 - Mode 03 stored DTCs
+- Mode 07 pending DTCs
+- deduplication across Mode 03 + Mode 07
 - Mode 04 clear
+- combined Mode 03 + Mode 07 reread after clear
 
-Earlier HC58 bench work also validated Mode 07 pending-code behavior, but Mode 07 is not currently exposed in the UI.
+See [DTC.md](DTC.md) for the diagnostic state machine and traffic heuristics.
 
 ## Debugging rule
 

@@ -10,6 +10,8 @@ Big Dirty is an embedded hardware project with several independently sensitive s
 - keep the change if it solves the target problem
 - avoid unrelated cleanup in the same revision
 
+The authoritative baseline is now **BigDirty_UI_Main - Save 14**, identified as the final version.
+
 This repository intentionally keeps the .ino, .cpp, and .h files together in the Arduino sketch directory. Do not move them into src/ unless the build workflow is deliberately changed and retested.
 
 ## High-level architecture
@@ -35,7 +37,7 @@ SPI0 is shared by the display and touch controller. The MC68HC58 is isolated ont
 
 ## Main loop responsibilities
 
-The current top-level loop:
+The top-level loop:
 
 1. samples the five warning inputs
 2. updates the active page
@@ -75,9 +77,11 @@ Do not casually change the established display baseline:
 - RGB565
 - 480x320 landscape
 
+Save 14 uses explicit `displaySPI_begin()` / `displaySPI_end()` ownership. `setAddrWindow()` assumes the transaction is already open. Preserve that model unless a controlled display/touch regression test justifies changing it.
+
 ## Touch
 
-Touch is edge-triggered. readTouch() produces one event on the rising edge of a physical press. Touch_reset() clears the software edge detector after page changes.
+Touch is edge-triggered. `readTouch()` produces one event on the rising edge of a physical press. `Touch_reset()` clears the software edge detector after page changes.
 
 Current calibration:
 
@@ -88,29 +92,29 @@ Current calibration:
 
 ## HC58 ownership
 
-The April 2026 source has separate HC58 setup/state inside PID_Manager and DTC_Manager. Both use SPI1 and can initialize/reset the HC58.
+Save 14 retains separate HC58 setup/state inside PID_Manager and DTC_Manager. Both use SPI1 and can initialize/reset the HC58.
 
 That is functional but duplicated ownership. A future cleanup could create one HC58 transport layer shared by live PID and DTC code. Do not perform that refactor casually: it changes timing/state ownership in a bus interface that was difficult to stabilize.
 
 ## ENV ownership
 
-The current Page_Env.cpp both acquires and renders DHT20/current/transmission-temperature data.
+Final `Page_Env.cpp` both acquires and renders DHT20/current/transmission-temperature data.
 
-The later preferred architecture is:
+An optional future architecture is:
 
     sensor acquisition -> cached values -> Page_Env rendering
 
-This is documented as a migration item because the exact later source was not recovered in this repository snapshot.
+Because Save 14 is now recovered, this is a potential refactor rather than reconstruction of missing code.
 
 ## Blocking work
 
-Most UI behavior is non-blocking, but DTC traffic contains deliberate long windows. Mode 03 drains for hundreds of milliseconds, and Mode 04 clear listens for several seconds before reread.
+Most UI behavior is non-blocking, but DTC traffic contains deliberate long windows. Mode 03 and Mode 07 each drain for hundreds of milliseconds, and Mode 04 clear listens for several seconds before a combined reread.
 
 Do not aggressively shorten these timings without hardware validation.
 
 ## Reference sketch
 
-Four_PIDs_at_once.ino is a historical Arduino Uno timing logger, not the Teensy application entry point.
+`Four_PIDs_at_once.ino` is a historical Arduino Uno timing logger, not the Teensy application entry point.
 
 It records the earlier golden chain:
 
