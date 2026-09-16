@@ -1,0 +1,1340 @@
+============================================================
+FILE: BigDirty_UI_Main.ino
+============================================================
+#include <SPI.h>
+#include <SD.h>
+#include "Display_ST7796S.h"
+#include "Touch_XPT2046.h"
+#include "RawImage.h"
+#include "PageManager.h"
+#include "PinConfig.h"
+
+void setup() {
+  Serial.begin(115200);
+  SPI.begin();
+  SD.begin(BUILTIN_SDCARD);
+  initDisplay();
+  fillScreen_FAST(0x0000);
+  initTouch();
+
+  PageManager_begin();         // BootLogo page is now first page
+ 
+  Serial.println("UI boot complete");
+}
+
+void loop() {
+  PageManager_update();
+}
+
+
+
+============================================================
+FILE: Display_Fonts.cpp
+============================================================
+#include "Display_Fonts.h"
+#include <string.h>
+
+// =======================================================
+// 5Ã—7 FUR-style digit font ('0'..'9')
+// =======================================================
+
+static const uint8_t glyph_0_bits[7] = {0x70,0x88,0x98,0xA8,0xC8,0x88,0x70};
+static const uint8_t glyph_1_bits[7] = {0x20,0x60,0xA0,0x20,0x20,0x20,0xF8};
+static const uint8_t glyph_2_bits[7] = {0x70,0x88,0x08,0x10,0x20,0x40,0xF8};
+static const uint8_t glyph_3_bits[7] = {0x70,0x88,0x08,0x70,0x08,0x88,0x70};
+static const uint8_t glyph_4_bits[7] = {0x10,0x30,0x50,0x90,0xF8,0x10,0x10};
+static const uint8_t glyph_5_bits[7] = {0xF8,0x80,0x80,0xF0,0x08,0x88,0x70};
+static const uint8_t glyph_6_bits[7] = {0x70,0x88,0x80,0xF0,0x88,0x88,0x70};
+static const uint8_t glyph_7_bits[7] = {0xF8,0x08,0x10,0x20,0x40,0x40,0x40};
+static const uint8_t glyph_8_bits[7] = {0x70,0x88,0x88,0x70,0x88,0x88,0x70};
+static const uint8_t glyph_9_bits[7] = {0x70,0x88,0x88,0x78,0x08,0x88,0x70};
+
+static const BDGlyph furDigits_glyphs[10] = {
+    {5,7,glyph_0_bits},{5,7,glyph_1_bits},{5,7,glyph_2_bits},{5,7,glyph_3_bits},{5,7,glyph_4_bits},
+    {5,7,glyph_5_bits},{5,7,glyph_6_bits},{5,7,glyph_7_bits},{5,7,glyph_8_bits},{5,7,glyph_9_bits}
+};
+
+const BDFont FONT_FUR_DIGITS_5x7 = {'0','9',furDigits_glyphs};
+
+// =======================================================
+// 5Ã—7 CAPS font ('A'..'Z')
+// =======================================================
+
+#define ROW(x) (x)
+
+static const uint8_t glyph_A_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x88),ROW(0xF8),ROW(0x88),ROW(0x88),ROW(0x88)};
+static const uint8_t glyph_B_bits[7] = {ROW(0xF0),ROW(0x88),ROW(0x88),ROW(0xF0),ROW(0x88),ROW(0x88),ROW(0xF0)};
+static const uint8_t glyph_C_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x80),ROW(0x80),ROW(0x80),ROW(0x88),ROW(0x70)};
+static const uint8_t glyph_D_bits[7] = {ROW(0xE0),ROW(0x90),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x90),ROW(0xE0)};
+static const uint8_t glyph_E_bits[7] = {ROW(0xF8),ROW(0x80),ROW(0x80),ROW(0xF0),ROW(0x80),ROW(0x80),ROW(0xF8)};
+static const uint8_t glyph_F_bits[7] = {ROW(0xF8),ROW(0x80),ROW(0x80),ROW(0xF0),ROW(0x80),ROW(0x80),ROW(0x80)};
+static const uint8_t glyph_G_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x80),ROW(0xB8),ROW(0x88),ROW(0x88),ROW(0x70)};
+static const uint8_t glyph_H_bits[7] = {ROW(0x88),ROW(0x88),ROW(0x88),ROW(0xF8),ROW(0x88),ROW(0x88),ROW(0x88)};
+static const uint8_t glyph_I_bits[7] = {ROW(0x70),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x70)};
+static const uint8_t glyph_J_bits[7] = {ROW(0x78),ROW(0x10),ROW(0x10),ROW(0x10),ROW(0x10),ROW(0x90),ROW(0x60)};
+static const uint8_t glyph_K_bits[7] = {ROW(0x88),ROW(0x90),ROW(0xA0),ROW(0xC0),ROW(0xA0),ROW(0x90),ROW(0x88)};
+static const uint8_t glyph_L_bits[7] = {ROW(0x80),ROW(0x80),ROW(0x80),ROW(0x80),ROW(0x80),ROW(0x80),ROW(0xF8)};
+static const uint8_t glyph_M_bits[7] = {ROW(0x88),ROW(0xD8),ROW(0xA8),ROW(0xA8),ROW(0x88),ROW(0x88),ROW(0x88)};
+static const uint8_t glyph_N_bits[7] = {ROW(0x88),ROW(0xC8),ROW(0xA8),ROW(0x98),ROW(0x88),ROW(0x88),ROW(0x88)};
+static const uint8_t glyph_O_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x70)};
+static const uint8_t glyph_P_bits[7] = {ROW(0xF0),ROW(0x88),ROW(0x88),ROW(0xF0),ROW(0x80),ROW(0x80),ROW(0x80)};
+static const uint8_t glyph_Q_bits[7] = {ROW(0x70),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0xA8),ROW(0x90),ROW(0x68)};
+static const uint8_t glyph_R_bits[7] = {ROW(0xF0),ROW(0x88),ROW(0x88),ROW(0xF0),ROW(0xA0),ROW(0x90),ROW(0x88)};
+static const uint8_t glyph_S_bits[7] = {ROW(0x78),ROW(0x80),ROW(0x70),ROW(0x08),ROW(0x08),ROW(0x88),ROW(0x70)};
+static const uint8_t glyph_T_bits[7] = {ROW(0xF8),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20)};
+static const uint8_t glyph_U_bits[7] = {ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x70)};
+static const uint8_t glyph_V_bits[7] = {ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x88),ROW(0x50),ROW(0x50),ROW(0x20)};
+static const uint8_t glyph_W_bits[7] = {ROW(0x88),ROW(0x88),ROW(0x88),ROW(0xA8),ROW(0xA8),ROW(0xD8),ROW(0x88)};
+static const uint8_t glyph_X_bits[7] = {ROW(0x88),ROW(0x50),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x50),ROW(0x88)};
+static const uint8_t glyph_Y_bits[7] = {ROW(0x88),ROW(0x50),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20),ROW(0x20)};
+static const uint8_t glyph_Z_bits[7] = {ROW(0xF8),ROW(0x08),ROW(0x10),ROW(0x20),ROW(0x40),ROW(0x80),ROW(0xF8)};
+
+static const BDGlyph furCaps_glyphs[26] = {
+    {5,7,glyph_A_bits},{5,7,glyph_B_bits},{5,7,glyph_C_bits},{5,7,glyph_D_bits},{5,7,glyph_E_bits},
+    {5,7,glyph_F_bits},{5,7,glyph_G_bits},{5,7,glyph_H_bits},{5,7,glyph_I_bits},{5,7,glyph_J_bits},
+    {5,7,glyph_K_bits},{5,7,glyph_L_bits},{5,7,glyph_M_bits},{5,7,glyph_N_bits},{5,7,glyph_O_bits},
+    {5,7,glyph_P_bits},{5,7,glyph_Q_bits},{5,7,glyph_R_bits},{5,7,glyph_S_bits},{5,7,glyph_T_bits},
+    {5,7,glyph_U_bits},{5,7,glyph_V_bits},{5,7,glyph_W_bits},{5,7,glyph_X_bits},{5,7,glyph_Y_bits},
+    {5,7,glyph_Z_bits}
+};
+
+const BDFont FONT_FUR_CAPS_5x7 = {'A','Z',furCaps_glyphs};
+
+// =======================================================
+// Extra symbols: %, Â°, /
+// =======================================================
+
+static const uint8_t glyph_percent_bits[7] = {0x88,0x08,0x10,0x20,0x40,0x88,0x00};
+static const uint8_t glyph_degree_bits[7]  = {0x60,0x90,0x90,0x60,0x00,0x00,0x00};
+static const uint8_t glyph_slash_bits[7]   = {0x08,0x10,0x20,0x40,0x80,0x00,0x00};
+
+static const BDGlyph glyph_percent = {5,7,glyph_percent_bits};
+static const BDGlyph glyph_degree  = {5,7,glyph_degree_bits};
+static const BDGlyph glyph_slash   = {5,7,glyph_slash_bits};
+
+// =======================================================
+// Rendering helpers
+// =======================================================
+
+void drawGlyphScaled(int x, int y, char c,
+                     const BDFont &font,
+                     uint16_t color,
+                     uint8_t scale)
+{
+    if (c < font.charFirst || c > font.charLast) return;
+    const BDGlyph &g = font.glyphs[c - font.charFirst];
+
+    for (uint8_t row = 0; row < g.height; row++) {
+        uint8_t bits = g.bitmap[row];
+        for (uint8_t col = 0; col < g.width; col++) {
+            if (bits & (0x80 >> col)) {
+                for (uint8_t dy = 0; dy < scale; dy++)
+                for (uint8_t dx = 0; dx < scale; dx++)
+                    drawPixel_FAST(x + col*scale + dx, y + row*scale + dy, color);
+            }
+        }
+    }
+}
+
+// =======================================================
+// drawTextScaled â€” final fixed ordering
+// =======================================================
+
+void drawTextScaled(int x, int y, const char *text,
+                    const BDFont &font,
+                    uint16_t color,
+                    uint8_t scale)
+{
+    if (!text || scale == 0) return;
+    int cx = x;
+
+    while (*text) {
+        unsigned char c = *text;
+
+        // ---- 1) Percent â€” highest priority (must be first) ----
+        if (c == '%') {
+            const BDGlyph &g = glyph_percent;
+            for (uint8_t row = 0; row < g.height; row++) {
+                uint8_t bits = g.bitmap[row];
+                for (uint8_t col = 0; col < g.width; col++) {
+                    if (bits & (0x80 >> col)) {
+                        for (uint8_t dy = 0; dy < scale; dy++)
+                        for (uint8_t dx = 0; dx < scale; dx++)
+                            drawPixel_FAST(cx + col*scale + dx, y + row*scale + dy, color);
+                    }
+                }
+            }
+            cx += (glyph_percent.width + 1) * scale;
+            text++;
+            continue;
+        }
+
+        // ---- 2) UTF-8 degree symbol 0xC2 0xB0 ----
+        if (c == 0xC2 && (unsigned char)text[1] == 0xB0) {
+            const BDGlyph &g = glyph_degree;
+            for (uint8_t row = 0; row < g.height; row++) {
+                uint8_t bits = g.bitmap[row];
+                for (uint8_t col = 0; col < g.width; col++) {
+                    if (bits & (0x80 >> col)) {
+                        for (uint8_t dy = 0; dy < scale; dy++)
+                        for (uint8_t dx = 0; dx < scale; dx++)
+                            drawPixel_FAST(cx + col*scale + dx, y + row*scale + dy, color);
+                    }
+                }
+            }
+            cx += (g.width + 1) * scale;
+            text += 2;
+            continue;
+        }
+
+        // ---- 3) Single-byte ANSI degree (rare but supported) ----
+        if (c == 0xB0 || c == 0xF8) {
+            const BDGlyph &g = glyph_degree;
+            for (uint8_t row = 0; row < g.height; row++) {
+                uint8_t bits = g.bitmap[row];
+                for (uint8_t col = 0; col < g.width; col++) {
+                    if (bits & (0x80 >> col)) {
+                        for (uint8_t dy = 0; dy < scale; dy++)
+                        for (uint8_t dx = 0; dx < scale; dx++)
+                            drawPixel_FAST(cx + col*scale + dx, y + row*scale + dy, color);
+                    }
+                }
+            }
+            cx += (glyph_degree.width + 1) * scale;
+            text++;
+            continue;
+        }
+
+        // ---- 4) Slash ----
+        if (c == '/') {
+            const BDGlyph &g = glyph_slash;
+            for (uint8_t row = 0; row < g.height; row++) {
+                uint8_t bits = g.bitmap[row];
+                for (uint8_t col = 0; col < g.width; col++) {
+                    if (bits & (0x80 >> col)) {
+                        for (uint8_t dy = 0; dy < scale; dy++)
+                        for (uint8_t dx = 0; dx < scale; dx++)
+                            drawPixel_FAST(cx + col*scale + dx, y + row*scale + dy, color);
+                    }
+                }
+            }
+            cx += (glyph_slash.width + 1) * scale;
+            text++;
+            continue;
+        }
+
+        // ---- 5) Space ----
+        if (c == ' ') {
+            cx += (font.glyphs[0].width + 1) * scale;
+            text++;
+            continue;
+        }
+
+        // ---- 6) Normal ASCII glyph ----
+        if (c >= font.charFirst && c <= font.charLast) {
+            const BDGlyph &g = font.glyphs[c - font.charFirst];
+            drawGlyphScaled(cx, y, c, font, color, scale);
+            cx += (g.width + 1) * scale;
+            text++;
+            continue;
+        }
+
+        // ---- 7) Fallback skip ----
+        cx += 2 * scale;
+        text++;
+    }
+}
+
+// =======================================================
+// measureTextWidth â€” supports all symbols
+// =======================================================
+
+int measureTextWidth(const char *text,
+                     const BDFont &font,
+                     uint8_t scale)
+{
+    if (!text) return 0;
+    int px = 0;
+
+    while (*text) {
+        unsigned char c = *text++;
+
+        if (c == '%')      { px += (glyph_percent.width + 1) * scale; continue; }
+        if (c == 0xC2 && (unsigned char)*text == 0xB0) { px += (glyph_degree.width + 1) * scale; text++; continue; }
+        if (c == 0xB0 || c == 0xF8) { px += (glyph_degree.width + 1) * scale; continue; }
+        if (c == '/')      { px += (glyph_slash.width + 1) * scale; continue; }
+        if (c == ' ')      { px += (font.glyphs[0].width + 1) * scale; continue; }
+
+        if (c >= font.charFirst && c <= font.charLast) {
+            const BDGlyph &g = font.glyphs[c - font.charFirst];
+            px += (g.width + 1) * scale;
+        } else {
+            px += 2 * scale;
+        }
+    }
+
+    return px;
+}
+
+// =======================================================
+// Centers VALUE + UNIT block
+// =======================================================
+
+void drawValueUnitCentered(int x0, int y0, int x1, int y1,
+                           const char *value,
+                           uint8_t fieldDigits,
+                           const char *unit,
+                           const BDFont &fontValue,
+                           uint8_t scaleValue,
+                           const BDFont &fontUnit,
+                           uint8_t scaleUnit,
+                           uint16_t color)
+{
+    int digitW = (fontValue.glyphs[0].width + 1) * scaleValue;
+    int valueW = digitW * strlen(value);
+    int unitW  = measureTextWidth(unit, fontUnit, scaleUnit);
+
+    int totalWidth = valueW + (unitW > 0 ? (digitW / 2) : 0) + unitW;
+    int cx = (x0 + x1) / 2;
+    int left = cx - totalWidth / 2;
+
+    int valueTop = y0 + 20;
+    drawTextScaled(left, valueTop, value, fontValue, color, scaleValue);
+
+    if (unitW > 0) {
+        int unitTop = valueTop + 7 * scaleValue - 7 * scaleUnit;
+        drawTextScaled(left + valueW + (digitW / 2), unitTop, unit, fontUnit, color, scaleUnit);
+    }
+}
+
+
+
+============================================================
+FILE: Display_Fonts.h
+============================================================
+#pragma once
+#include <Arduino.h>
+#include "Display_ST7796S.h"
+
+// ===== Glyph + Font structures =====
+struct BDGlyph {
+    uint8_t width;
+    uint8_t height;
+    const uint8_t *bitmap;
+};
+
+struct BDFont {
+    uint8_t charFirst;
+    uint8_t charLast;
+    const BDGlyph *glyphs;
+};
+
+// ===== Public fonts (5x7 FUR style)
+extern const BDFont FONT_FUR_DIGITS_5x7;  // '0'..'9'
+extern const BDFont FONT_FUR_CAPS_5x7;    // 'A'..'Z'
+
+// ===== Text and layout drawing =====
+void drawGlyphScaled(int x, int y, char c,
+                     const BDFont &font,
+                     uint16_t color,
+                     uint8_t scale);
+
+void drawTextScaled(int x, int y, const char *text,
+                    const BDFont &font,
+                    uint16_t color,
+                    uint8_t scale);
+
+int measureTextWidth(const char *text,
+                     const BDFont &font,
+                     uint8_t scale);
+
+// Center full VALUE + UNIT block inside a bounding box
+void drawValueUnitCentered(int x0, int y0, int x1, int y1,
+                           const char *value,
+                           uint8_t fieldDigits,      // expected max digits (2-3-4)
+                           const char *unit,
+                           const BDFont &fontValue,  // digits font
+                           uint8_t scaleValue,
+                           const BDFont &fontUnit,   // caps font
+                           uint8_t scaleUnit,
+                           uint16_t color);
+
+
+
+============================================================
+FILE: Display_ST7796S.cpp
+============================================================
+#include "Display_ST7796S.h"
+#include "PinConfig.h"
+#include <SPI.h>
+
+// ===== Private SPI write helpers =====
+static void wr_cmd(uint8_t c) {
+    digitalWrite(TFT_DC, LOW);
+    digitalWrite(TFT_CS, LOW);
+    SPI.transfer(c);
+    digitalWrite(TFT_CS, HIGH);
+}
+
+static void wr_dat(uint8_t d) {
+    digitalWrite(TFT_DC, HIGH);
+    digitalWrite(TFT_CS, LOW);
+    SPI.transfer(d);
+    digitalWrite(TFT_CS, HIGH);
+}
+
+static void wr_dat16(uint16_t d) {
+    wr_dat(d >> 8);
+    wr_dat(d & 0xFF);
+}
+
+// ===== Display init (known-good from loader) =====
+void initDisplay() {
+    pinMode(TFT_CS,  OUTPUT);
+    pinMode(TFT_DC,  OUTPUT);
+    pinMode(TFT_RST, OUTPUT);
+    pinMode(TFT_LED, OUTPUT);
+    digitalWrite(TFT_LED, HIGH);
+
+    SPI.begin();
+    SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE3));
+
+    // Hardware reset
+    digitalWrite(TFT_RST, LOW);
+    delay(40);
+    digitalWrite(TFT_RST, HIGH);
+    delay(120);
+
+    // ST7796S init
+    wr_cmd(0xF0); wr_dat(0xC3);
+    wr_cmd(0xF0); wr_dat(0x96);
+    wr_cmd(0x36); wr_dat(0x28);   // landscape
+    wr_cmd(0x3A); wr_dat(0x55);   // RGB565
+    wr_cmd(0xB4); wr_dat(0x01);
+    wr_cmd(0xB7); wr_dat(0xC6);
+    wr_cmd(0x11);
+    delay(120);
+    wr_cmd(0x29);
+
+    // Default drawing window full screen
+    wr_cmd(0x2A); wr_dat16(0); wr_dat16(479);
+    wr_cmd(0x2B); wr_dat16(0); wr_dat16(319);
+    wr_cmd(0x2C);
+}
+
+// ===== Set drawing window =====
+void setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
+    wr_cmd(0x2A);
+    wr_dat16(x0);
+    wr_dat16(x1);
+
+    wr_cmd(0x2B);
+    wr_dat16(y0);
+    wr_dat16(y1);
+
+    wr_cmd(0x2C);
+}
+
+// ===== Draw single pixel =====
+void drawPixel_FAST(int x, int y, uint16_t color) {
+    if (x < 0 || x >= 480 || y < 0 || y >= 320) return;
+
+    setAddrWindow(x, y, x, y);
+    wr_dat16(color);
+}
+
+// ===== FULL, INSTANT SCREEN FILL (NO WIPE) =====
+void fillScreen_FAST(uint16_t color) {
+    // full window once
+    setAddrWindow(0, 0, 479, 319);
+
+    uint8_t hi = color >> 8;
+    uint8_t lo = color & 0xFF;
+
+    digitalWrite(TFT_DC, HIGH);
+    digitalWrite(TFT_CS, LOW);
+
+    // blast the entire framebuffer with one continuous stream
+    uint32_t total = 480UL * 320UL;
+    while (total--) {
+        SPI.transfer(hi);
+        SPI.transfer(lo);
+    }
+
+    digitalWrite(TFT_CS, HIGH);
+}
+
+// ===== LED Backlight PWM (0â€“255) =====
+void setBacklightPWM(uint8_t value) {
+    analogWrite(TFT_LED, value);
+}
+
+
+
+============================================================
+FILE: Display_ST7796S.h
+============================================================
+#pragma once
+#include <Arduino.h>
+#include <SPI.h>
+
+extern const int TFT_CS;
+extern const int TFT_DC;
+extern const int TFT_RST;
+extern const int TFT_LED;
+
+// Public API for the display module
+void initDisplay();
+void drawPixel_FAST(int x, int y, uint16_t color);
+void fillScreen_FAST(uint16_t color);
+
+// RAW image drawing will be added later
+void drawRAW480x320(const char *filename);
+void setBacklightPWM(uint8_t value);
+void setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
+
+
+
+============================================================
+FILE: Overlay_Warnings.cpp
+============================================================
+#include "Overlay_Warnings.h"
+#include "Display_ST7796S.h"
+#include <SD.h>
+
+// ---------------------------------------------------------------------------
+// ICON CONFIGURATION
+// ---------------------------------------------------------------------------
+static const int ICON_W = 96;
+static const int ICON_H = 72;
+static const int ICON_Y = (320 - ICON_H - 6);   // 6 px above bottom
+
+static const char* ICON_FILES[5] = {
+    "brake.raw",
+    "checkengine.raw",
+    "highbeam.raw",
+    "4WD.raw",
+    "seatbelt.raw"
+};
+
+// ---------------------------------------------------------------------------
+// FULL ICON RAW DRAW FUNCTION (embedded by request â€” independent of RawImage.h)
+// Draws a 96Ã—72 RGB565 little-endian icon at (x, y)
+// ---------------------------------------------------------------------------
+static void drawRAW_icon96x72(const char* filename, int x, int y)
+{
+    File f = SD.open(filename, FILE_READ);
+    if (!f) return;
+
+    const int BUFSIZE = 512;
+    uint8_t buf[BUFSIZE];
+    int n = f.read(buf, BUFSIZE);
+    int px = 0;
+
+    for (uint16_t yy = 0; yy < ICON_H; yy++)
+    {
+        for (uint16_t xx = 0; xx < ICON_W; xx++)
+        {
+            if (px + 1 >= n) {
+                n = f.read(buf, BUFSIZE);
+                px = 0;
+                if (!n) { f.close(); return; }
+            }
+
+            // RGB565 little-endian: low byte first, then high byte
+            uint8_t lo = buf[px++];
+            uint8_t hi = buf[px++];
+            uint16_t color = (hi << 8) | lo;
+
+            drawPixel_FAST(x + xx, y + yy, color);
+        }
+    }
+
+    f.close();
+}
+
+// ---------------------------------------------------------------------------
+// PUBLIC INTERFACE
+// ---------------------------------------------------------------------------
+void Overlay_Warnings_begin() {
+    // Reserved for future features (blink timing, animation, etc.)
+}
+
+void Overlay_Warnings_update() {
+    int x = 0;
+    for (int i = 0; i < 5; i++) {
+        drawRAW_icon96x72(ICON_FILES[i], x, ICON_Y);
+        x += ICON_W;
+    }
+}
+
+
+
+============================================================
+FILE: Overlay_Warnings.h
+============================================================
+#pragma once
+
+// Initialize overlay system (optional for future features)
+void Overlay_Warnings_begin();
+
+// Draw all 5 warning icons in their positions (always ON for now)
+void Overlay_Warnings_update();
+
+
+
+============================================================
+FILE: PageManager.cpp
+============================================================
+#include "PageManager.h"
+#include "Display_ST7796S.h"
+#include "Touch_XPT2046.h"
+
+// Pages
+#include "Page_BootLogo.h"
+#include "Page_Env.h"
+#include "Page_PID1.h"
+#include "Page_PID2.h"
+#include "Page_PID3.h"
+#include "Page_DTC.h"
+
+// Current and queued page tracking
+static PageID currentPage = PAGE_BOOTLOGO;
+static PageID nextPage    = PAGE_BOOTLOGO;
+static bool pageChangePending = false;
+
+// Page handler table
+static void (*pageBegin[PAGE_MAX])()  = { nullptr };
+static void (*pageUpdate[PAGE_MAX])() = { nullptr };
+
+// PAGE CHANGE DEBOUNCE â€” prevents page switch loops
+static uint32_t blockingInputUntil = 0;
+static uint32_t lastPageChangeTime = 0;
+#define PAGE_CHANGE_DEBOUNCE_MS 500
+
+void PageManager_begin()
+{
+    pageBegin[PAGE_BOOTLOGO]   = Page_BootLogo_begin;
+    pageUpdate[PAGE_BOOTLOGO]  = Page_BootLogo_update;
+
+    pageBegin[PAGE_ENV]        = Page_Env_begin;
+    pageUpdate[PAGE_ENV]       = Page_Env_update;
+
+    pageBegin[PAGE_PID1]       = Page_PID1_begin;
+    pageUpdate[PAGE_PID1]      = Page_PID1_update;
+
+    pageBegin[PAGE_PID2]       = Page_PID2_begin;
+    pageUpdate[PAGE_PID2]      = Page_PID2_update;
+
+    pageBegin[PAGE_PID3]       = Page_PID3_begin;
+    pageUpdate[PAGE_PID3]      = Page_PID3_update;
+
+    pageBegin[PAGE_DTC]        = Page_DTC_begin;
+    pageUpdate[PAGE_DTC]       = Page_DTC_update;
+
+    currentPage = PAGE_BOOTLOGO;
+    lastPageChangeTime = millis();
+    if (pageBegin[currentPage]) pageBegin[currentPage]();
+    Touch_reset();   // <<< ensures first page also starts with no "finger down"
+    blockingInputUntil = millis() + 200; // Block touch input briefly to avoid "switch during touch" ghost box
+
+}
+
+void PageManager_update()
+{
+    // Ignore all touch input during the post-switch guard window
+    if (millis() < blockingInputUntil) {
+        Touch_reset();
+        return;
+    }
+
+    if (pageChangePending) {
+        pageChangePending = false;
+        currentPage = nextPage;
+        lastPageChangeTime = millis();
+        if (pageBegin[currentPage]) {
+            pageBegin[currentPage]();
+        }
+        Touch_reset();
+        blockingInputUntil = millis() + 200;
+    }
+
+    if (millis() - lastPageChangeTime >= PAGE_CHANGE_DEBOUNCE_MS) {
+        if (pageUpdate[currentPage]) {
+            pageUpdate[currentPage]();
+        }
+    }
+}
+
+void PageManager_switchTo(PageID id)
+{
+    if (id >= PAGE_MAX) return;
+    nextPage = id;
+    pageChangePending = true;
+}
+
+PageID PageManager_current()
+{
+    return currentPage;
+}
+
+
+
+============================================================
+FILE: PageManager.h
+============================================================
+#pragma once
+#include <stdint.h>
+
+// ---- List of all UI pages ----
+// Order matters: 0 MUST be BootLogo
+enum PageID {
+    PAGE_BOOTLOGO = 0,
+    PAGE_ENV = 1,
+    PAGE_PID1 = 2,
+    PAGE_PID2 = 3,
+    PAGE_PID3 = 4,
+    PAGE_DTC = 5,
+    PAGE_MAX
+};
+
+// Initialize the page system
+void PageManager_begin();
+
+// Called on every loop
+void PageManager_update();
+
+// Switch to a different page
+void PageManager_switchTo(PageID id);
+
+// Get currently active page
+PageID PageManager_current();
+
+// Register a page (called during begin)
+void PageManager_registerPage(void (*beginFn)(), void (*updateFn)());
+
+
+
+============================================================
+FILE: Page_BootLogo.cpp
+============================================================
+#include "Page_BootLogo.h"
+#include "Display_ST7796S.h"
+#include "RawImage.h"
+#include "Touch_XPT2046.h"
+#include "PageManager.h"
+
+static uint32_t bootStartTime = 0;
+static bool fadeActive = false;
+static uint8_t fadeStep = 0;
+
+#define BOOT_TIMEOUT_MS   2500       // 2.5 seconds before auto-exit
+#define FADE_STEPS        32
+#define FADE_INTERVAL_MS  25         // 32 Ã— 25ms â‰ˆ 800ms fade-out
+
+void Page_BootLogo_begin()
+{
+    bootStartTime = millis();
+    fadeActive = false;
+    fadeStep = 0;
+
+    setBacklightPWM(255);               // full brightness
+    fillScreen_FAST(0x0000);
+    drawRAW480x320("/bowtie.raw");
+}
+
+void Page_BootLogo_update()
+{
+    uint32_t now = millis();
+
+    // Trigger fade from either touch or timeout
+    TouchPoint tp = readTouch();
+    if (!fadeActive && (tp.touched || (now - bootStartTime >= BOOT_TIMEOUT_MS)))
+    {
+        fadeActive = true;
+        fadeStep = 0;
+    }
+
+    // Run fade non-blocking
+    if (fadeActive)
+    {
+        static uint32_t lastFade = 0;
+        if (now - lastFade >= FADE_INTERVAL_MS)
+        {
+            lastFade = now;
+            fadeStep++;
+
+            // linear brightness: 255 â†’ 0
+            int brightness = 255 - ((255 * fadeStep) / FADE_STEPS);
+            if (brightness < 0) brightness = 0;
+            setBacklightPWM(brightness);
+
+            // fade finished
+            if (fadeStep >= FADE_STEPS)
+            {
+                setBacklightPWM(0);                // keep screen dark
+                fadeActive = false;
+setBacklightPWM(0);            // stay dark until ENV fade-in
+PageManager_switchTo(PAGE_ENV);
+                return;
+            }
+        }
+    }
+}
+
+
+
+============================================================
+FILE: Page_BootLogo.h
+============================================================
+#ifndef PAGE_BOOTLOGO_H
+#define PAGE_BOOTLOGO_H
+
+#include <Arduino.h>
+
+void Page_BootLogo_begin();
+void Page_BootLogo_update();
+
+#endif
+
+
+
+============================================================
+FILE: Page_DTC.cpp
+============================================================
+#include "Display_ST7796S.h"
+#include "Touch_XPT2046.h"
+#include "PageManager.h"
+#include "Page_DTC.h"
+
+void Page_DTC_begin() {
+    fillScreen_FAST(0x0000);
+
+    setAddrWindow(60, 80, 419, 239);
+    uint16_t color = 0xFFE0; // YELLOW
+    uint8_t hi = color >> 8, lo = color & 0xFF;
+
+    digitalWrite(TFT_DC, HIGH);
+    digitalWrite(TFT_CS, LOW);
+    for (int i = 0; i < (360 * 160); i++) { SPI.transfer(hi); SPI.transfer(lo); }
+    digitalWrite(TFT_CS, HIGH);
+    setAddrWindow(0, 0, 479, 319);
+
+
+    setBacklightPWM(255);
+}
+
+void Page_DTC_update() {
+    TouchPoint tp = readTouch();
+    if (tp.touched) {
+        PageManager_switchTo(PAGE_ENV);   // wrap-around
+    }
+}
+
+
+
+============================================================
+FILE: Page_DTC.h
+============================================================
+#pragma once
+void Page_DTC_begin();
+void Page_DTC_update();
+
+
+
+============================================================
+FILE: Page_Env.cpp
+============================================================
+#include "Page_Env.h"
+#include "Display_ST7796S.h"
+#include "Display_Fonts.h"
+#include "Overlay_Warnings.h"
+#include "Touch_XPT2046.h"
+#include "PageManager.h"
+
+static bool envDrawn = false;
+
+#define AQUA 0x07FF
+
+void Page_Env_begin() {
+    envDrawn = false;
+    fillScreen_FAST(0x0000);
+    setBacklightPWM(255);
+}
+
+void Page_Env_update() {
+
+    if (!envDrawn) {
+        envDrawn = true;
+
+        // Vertical layout (overlay strip reserved)
+        const int TOP_Y0  = 10;
+        const int TOP_Y1  = 159;
+        const int BOT_Y0  = 120;
+        const int BOT_Y1  = 230;
+
+        const int COL0_X0 = 0;
+        const int COL0_X1 = 239;
+        const int COL1_X0 = 240;
+        const int COL1_X1 = 479;
+
+        const uint8_t SCALE_VAL  = 4;
+        const uint8_t SCALE_UNIT = 3;
+        const uint8_t SCALE_LBL  = 2;
+
+        auto computeLabelY = [&](int qy0) -> int {
+            int valueTop    = qy0 + 20;
+            int valueBottom = valueTop + 7 * SCALE_VAL;
+            return valueBottom + 10;
+        };
+
+        // ====================== Q1 Ambient (top-left) ======================
+        drawValueUnitCentered(
+            COL0_X0, TOP_Y0, COL0_X1, TOP_Y1,
+            "72",   3,  "Â°F",
+            FONT_FUR_DIGITS_5x7, SCALE_VAL,
+            FONT_FUR_CAPS_5x7,   SCALE_UNIT,
+            AQUA
+        );
+
+        {
+            const char *lbl = "AMBIENT TEMP";
+            int lw = measureTextWidth(lbl, FONT_FUR_CAPS_5x7, SCALE_LBL);
+            int cx = (COL0_X0 + COL0_X1) / 2;
+            int lx = cx - lw / 2;
+            int ly = computeLabelY(TOP_Y0);
+            drawTextScaled(lx, ly, lbl, FONT_FUR_CAPS_5x7, AQUA, SCALE_LBL);
+        }
+
+        // ====================== Q2 Humidity (top-right) ======================
+        drawValueUnitCentered(
+            COL1_X0, TOP_Y0, COL1_X1, TOP_Y1,
+            "45",   3,  "%",   // now with % symbol
+            FONT_FUR_DIGITS_5x7, SCALE_VAL,
+            FONT_FUR_CAPS_5x7,   SCALE_UNIT,
+            AQUA
+        );
+
+        {
+            const char *lbl = "HUMIDITY";
+            int lw = measureTextWidth(lbl, FONT_FUR_CAPS_5x7, SCALE_LBL);
+            int cx = (COL1_X0 + COL1_X1) / 2;
+            int lx = cx - lw / 2;
+            int ly = computeLabelY(TOP_Y0);
+            drawTextScaled(lx, ly, lbl, FONT_FUR_CAPS_5x7, AQUA, SCALE_LBL);
+        }
+
+        // ====================== Q3 Alternator (bottom-left) ======================
+        drawValueUnitCentered(
+            COL0_X0, BOT_Y0, COL0_X1, BOT_Y1,
+            "12",   3,  "A",
+            FONT_FUR_DIGITS_5x7, SCALE_VAL,
+            FONT_FUR_CAPS_5x7,   SCALE_UNIT,
+            AQUA
+        );
+
+        {
+            const char *lbl = "ALTERNATOR";
+            int lw = measureTextWidth(lbl, FONT_FUR_CAPS_5x7, SCALE_LBL);
+            int cx = (COL0_X0 + COL0_X1) / 2;
+            int lx = cx - lw / 2;
+            int ly = computeLabelY(BOT_Y0);
+            drawTextScaled(lx, ly, lbl, FONT_FUR_CAPS_5x7, AQUA, SCALE_LBL);
+        }
+
+        // ====================== Q4 Trans Temp (bottom-right) ======================
+        drawValueUnitCentered(
+            COL1_X0, BOT_Y0, COL1_X1, BOT_Y1,
+            "140",   3,  "Â°F",
+            FONT_FUR_DIGITS_5x7, SCALE_VAL,
+            FONT_FUR_CAPS_5x7,   SCALE_UNIT,
+            AQUA
+        );
+
+        {
+            const char *lbl = "TRANS TEMP";
+            int lw = measureTextWidth(lbl, FONT_FUR_CAPS_5x7, SCALE_LBL);
+            int cx = (COL1_X0 + COL1_X1) / 2;
+            int lx = cx - lw / 2;
+            int ly = computeLabelY(BOT_Y0);
+            drawTextScaled(lx, ly, lbl, FONT_FUR_CAPS_5x7, AQUA, SCALE_LBL);
+        }
+
+     Overlay_Warnings_update();
+
+    }
+
+    // Touch â†’ next page
+    TouchPoint tp = readTouch();
+    if (tp.touched) {
+        PageManager_switchTo(PAGE_PID1);
+    }
+}
+
+
+
+============================================================
+FILE: Page_Env.h
+============================================================
+#pragma once
+
+void Page_Env_begin();
+void Page_Env_update();
+
+
+
+============================================================
+FILE: Page_PID1.cpp
+============================================================
+#include "Page_PID1.h"
+#include "Display_ST7796S.h"
+#include "Touch_XPT2046.h"
+#include "PageManager.h"
+
+
+
+void Page_PID1_begin() {
+    fillScreen_FAST(0x0000); // background black
+
+    setAddrWindow(60, 80, 419, 239);
+    uint16_t color = 0xF800; // RED    uint8_t hi = color >> 8, lo = color & 0xFF;
+
+    digitalWrite(TFT_DC, HIGH);
+    digitalWrite(TFT_CS, LOW);
+    for (int i = 0; i < (360 * 160); i++) { SPI.transfer(hi); SPI.transfer(lo); }
+    digitalWrite(TFT_CS, HIGH);
+    setAddrWindow(0, 0, 479, 319);
+
+
+    setBacklightPWM(255);
+}
+
+void Page_PID1_update() {
+    TouchPoint tp = readTouch();
+    if (tp.touched) {
+        PageManager_switchTo(PAGE_PID2);
+    }
+}
+
+
+
+============================================================
+FILE: Page_PID1.h
+============================================================
+#pragma once
+void Page_PID1_begin();
+void Page_PID1_update();
+
+
+
+============================================================
+FILE: Page_PID2.cpp
+============================================================
+#include "Page_PID2.h"
+#include "Display_ST7796S.h"
+#include "Touch_XPT2046.h"
+#include "PageManager.h"
+
+
+
+void Page_PID2_begin() {
+    fillScreen_FAST(0x0000);
+
+    setAddrWindow(60, 80, 419, 239);
+    uint16_t color = 0x07E0; // GREEN
+    uint8_t hi = color >> 8, lo = color & 0xFF;
+
+    digitalWrite(TFT_DC, HIGH);
+    digitalWrite(TFT_CS, LOW);
+    for (int i = 0; i < (360 * 160); i++) { SPI.transfer(hi); SPI.transfer(lo); }
+    digitalWrite(TFT_CS, HIGH);
+    setAddrWindow(0, 0, 479, 319);
+
+
+    setBacklightPWM(255);
+}
+
+void Page_PID2_update() {
+    TouchPoint tp = readTouch();
+    if (tp.touched) {
+        PageManager_switchTo(PAGE_PID3);
+    }
+}
+
+
+
+
+============================================================
+FILE: Page_PID2.h
+============================================================
+#pragma once
+void Page_PID2_begin();
+void Page_PID2_update();
+
+
+
+============================================================
+FILE: Page_PID3.cpp
+============================================================
+#include "Page_PID3.h"
+#include "Display_ST7796S.h"
+#include "Touch_XPT2046.h"
+#include "PageManager.h"
+
+void Page_PID3_begin() {
+    fillScreen_FAST(0x0000);
+
+    setAddrWindow(60, 80, 419, 239);
+    uint16_t color = 0x001F; // BLUE
+    uint8_t hi = color >> 8, lo = color & 0xFF;
+
+    digitalWrite(TFT_DC, HIGH);
+    digitalWrite(TFT_CS, LOW);
+    for (int i = 0; i < (360 * 160); i++) { SPI.transfer(hi); SPI.transfer(lo); }
+    digitalWrite(TFT_CS, HIGH);
+    setAddrWindow(0, 0, 479, 319);
+
+
+    setBacklightPWM(255);
+}
+
+void Page_PID3_update() {
+    TouchPoint tp = readTouch();
+    if (tp.touched) {
+        PageManager_switchTo(PAGE_DTC);
+    }
+}
+
+
+
+============================================================
+FILE: Page_PID3.h
+============================================================
+#pragma once
+void Page_PID3_begin();
+void Page_PID3_update();
+
+
+
+============================================================
+FILE: PinConfig.cpp
+============================================================
+#include "PinConfig.h"
+
+// Display pins
+const int TFT_CS  = 10;
+const int TFT_DC  = 9;
+const int TFT_RST = 8;
+const int TFT_LED = 23;
+
+// Touch pins
+const int T_CS  = 22;
+const int T_IRQ = 21;
+
+
+
+============================================================
+FILE: PinConfig.h
+============================================================
+#pragma once
+
+// Shared Teensy pin assignments
+
+extern const int TFT_CS;
+extern const int TFT_DC;
+extern const int TFT_RST;
+extern const int TFT_LED;
+
+extern const int T_CS;
+extern const int T_IRQ;
+
+
+
+============================================================
+FILE: RawImage.cpp
+============================================================
+#include "RawImage.h"
+#include <SD.h>
+#include "Display_ST7796S.h"  // for drawPixel_FAST(), etc.
+
+// Constants for the RAW boot image
+static const uint16_t RAW_WIDTH  = 480;
+static const uint16_t RAW_HEIGHT = 320;
+
+// Size of the streaming buffer (must be multiple of 2 for RGB565)
+static const size_t RAW_BUFFER_SIZE = 512;
+
+void drawRAW480x320(const char *filename)
+{
+    Serial.print("Opening raw: ");
+    Serial.println(filename);
+
+    // Try to open the file from SD
+    File f = SD.open(filename, FILE_READ);
+    if (!f) {
+        // If it fails, just bail out quietly (screen stays whatever it was)
+        // You could also fillScreen_FAST with a solid color here if you want.
+        return;
+    }
+
+    uint8_t  buffer[RAW_BUFFER_SIZE];
+    size_t   bytesInBuffer = 0;
+    size_t   bufferIndex   = 0;
+
+    // Helper lambda to refill the buffer when needed
+    auto refillBuffer = [&]() -> bool {
+        bytesInBuffer = f.read(buffer, RAW_BUFFER_SIZE);
+        bufferIndex   = 0;
+        return (bytesInBuffer > 0);
+    };
+
+    // Prime the buffer
+    if (!refillBuffer()) {
+        f.close();
+        return;
+    }
+
+    // Stream through the file and draw pixels row by row
+    for (uint16_t y = 0; y < RAW_HEIGHT; y++) {
+        for (uint16_t x = 0; x < RAW_WIDTH; x++) {
+
+            // Ensure we have at least 2 bytes available for one pixel
+            if (bufferIndex + 1 >= bytesInBuffer) {
+                if (!refillBuffer()) {
+                    // File ended unexpectedly; stop drawing
+                    f.close();
+                    return;
+                }
+            }
+
+            uint8_t hi = buffer[bufferIndex++];
+            uint8_t lo = buffer[bufferIndex++];
+
+            // RAW is little-endian RGB565: hi byte first, then lo byte
+            uint16_t color = (uint16_t)(hi << 8) | lo;
+
+            // Draw pixel at (x, y) in the current display orientation
+            drawPixel_FAST(x, y, color);
+        }
+    }
+
+    f.close();
+}
+
+
+
+============================================================
+FILE: RawImage.h
+============================================================
+#ifndef RAWIMAGE_H
+#define RAWIMAGE_H
+
+#include <Arduino.h>
+
+// Draw a 480x320 RGB565 (little-endian) RAW file fullscreen at (0,0).
+// Requirements:
+//  - File must exist on the SD card root (e.g. "/bowtie.raw")
+//  - File format: 480x320 pixels, RGB565, little-endian, no header
+//  - Display must already be initialized
+//  - SD.begin(BUILTIN_SDCARD) must have been called in setup()
+void drawRAW480x320(const char *filename);
+
+#endif // RAWIMAGE_H
+
+
+
+============================================================
+FILE: Touch_XPT2046.cpp
+============================================================
+#include "Touch_XPT2046.h"
+#include "PinConfig.h"
+#include <SPI.h>
+
+// Raw XPT2046 instance
+static XPT2046_Touchscreen ts(TOUCH_CS, TOUCH_IRQ);
+
+// Internal edge detection state
+static bool lastPressed = false;
+
+// Reset touch state (called by PageManager after a page switch)
+void Touch_reset() {
+    lastPressed = false;
+}
+
+void initTouch() {
+    ts.begin();
+    ts.setRotation(3);   // match display orientation
+    Touch_reset();       // ensure clean start
+}
+
+// This returns ONE press event per real tap (edge-triggered)
+TouchPoint readTouch() {
+    bool pressed = ts.touched();
+
+    // Rising edge = NEW PRESS â†’ generate touch event ONCE
+    if (pressed && !lastPressed) {
+        lastPressed = true;
+
+        TS_Point p = ts.getPoint();
+
+        const int RAW_MIN = 200;
+        const int RAW_MAX = 3800;
+
+        int16_t sx = map(p.x, RAW_MIN, RAW_MAX, 0, 479);
+        int16_t sy = map(p.y, RAW_MIN, RAW_MAX, 0, 319);
+
+        if (sx < 0)   sx = 0;
+        if (sx > 479) sx = 479;
+        if (sy < 0)   sy = 0;
+        if (sy > 319) sy = 319;
+
+        return { sx, sy, true };   // â† ONE event per tap
+    }
+
+    // Falling edge â€” release â†’ reset state ONLY
+    if (!pressed && lastPressed) {
+        lastPressed = false;
+    }
+
+    // Anything else â†’ no event
+    return { 0, 0, false };
+}
+
+bool touchPressed() {
+    // Page updates should only care whether a fresh press event is available
+    TouchPoint tp = readTouch();
+    return tp.touched;
+}
+
+
+
+============================================================
+FILE: Touch_XPT2046.h
+============================================================
+#pragma once
+#include <stdint.h>
+#include <XPT2046_Touchscreen.h>
+
+// Touch controller pin mapping (Teensy 4.1)
+#define TOUCH_CS   22
+#define TOUCH_IRQ  21
+
+// Basic touch point
+struct TouchPoint {
+    int16_t x;
+    int16_t y;
+    bool touched;
+};
+
+// Init touch hardware
+void initTouch();
+
+// Get touch state
+TouchPoint readTouch();
+
+// true if finger is touching screen
+bool touchPressed();   
+
+void Touch_reset();
+
+
