@@ -48,7 +48,7 @@ static void finalizeCurrentFrame(RequestCapture &capture,
   capture.currentOverflow = false;
 }
 
-static bool serviceOneRxItem(RequestCapture &capture, uint8_t *rfsOut = nullptr) {
+static bool serviceOneRxItem(RequestCapture &capture, uint8_t *rfsOut) {
   uint8_t status = 0;
   uint8_t data = 0;
 
@@ -85,7 +85,7 @@ static uint16_t serviceUntilEmpty(RequestCapture &capture) {
   // 20-byte RxFIFO plus completion codes. 64 is deliberately bounded but
   // comfortably above one normal burst.
   for (uint8_t i = 0; i < 64; ++i) {
-    if (!serviceOneRxItem(capture)) break;
+    if (!serviceOneRxItem(capture, nullptr)) break;
     serviced++;
   }
 
@@ -132,7 +132,7 @@ static void captureWithTimedPolling(RequestCapture &capture) {
   bool sawAnything = false;
 
   while ((millis() - startedMs) < POLL_CAPTURE_MAX_MS) {
-    if (serviceOneRxItem(capture)) {
+    if (serviceOneRxItem(capture, nullptr)) {
       sawAnything = true;
       lastNonEmptyMs = millis();
     } else if (sawAnything &&
