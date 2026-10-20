@@ -60,58 +60,19 @@ static constexpr uint16_t DEFAULT_REQUESTS_PER_MODE = 20;
 static constexpr uint16_t LONG_REQUESTS             = 100;
 
 // -----------------------------------------------------------------------------
-// ISR evidence capture
+// Shared types are deliberately declared before the first function definition.
+// This keeps Arduino's automatic prototype generator from placing prototypes
+// ahead of custom type declarations.
 // -----------------------------------------------------------------------------
 static constexpr uint8_t MAX_IRQ_TIMESTAMPS = 16;
-
-volatile uint32_t g_irqTimesUs[MAX_IRQ_TIMESTAMPS];
-volatile uint8_t  g_irqCount = 0;
-volatile bool     g_irqOverflow = false;
-volatile uint32_t g_totalIrqEdges = 0;
-
-void hc58InterruptHandler() {
-  const uint8_t index = g_irqCount;
-  if (index < MAX_IRQ_TIMESTAMPS) {
-    g_irqTimesUs[index] = micros();
-    g_irqCount = index + 1;
-  } else {
-    g_irqOverflow = true;
-  }
-  g_totalIrqEdges++;
-}
+static constexpr uint8_t MAX_FRAME_BYTES = 24;
+static constexpr uint8_t MAX_FRAMES_PER_REQUEST = 12;
 
 struct IrqSnapshot {
   uint8_t count;
   bool overflow;
   uint32_t timesUs[MAX_IRQ_TIMESTAMPS];
 };
-
-static void resetRequestIrqLog() {
-  noInterrupts();
-  g_irqCount = 0;
-  g_irqOverflow = false;
-  interrupts();
-}
-
-static IrqSnapshot snapshotRequestIrqs() {
-  IrqSnapshot snapshot{};
-
-  noInterrupts();
-  snapshot.count = g_irqCount;
-  snapshot.overflow = g_irqOverflow;
-  for (uint8_t i = 0; i < snapshot.count && i < MAX_IRQ_TIMESTAMPS; ++i) {
-    snapshot.timesUs[i] = g_irqTimesUs[i];
-  }
-  interrupts();
-
-  return snapshot;
-}
-
-// -----------------------------------------------------------------------------
-// Capture records
-// -----------------------------------------------------------------------------
-static constexpr uint8_t MAX_FRAME_BYTES = 24;
-static constexpr uint8_t MAX_FRAMES_PER_REQUEST = 12;
 
 struct FrameRecord {
   uint8_t bytes[MAX_FRAME_BYTES];
@@ -140,6 +101,59 @@ struct RequestCapture {
   bool timedOut;
   bool cleanupRequired;
 };
+
+struct BatchStats {
+  uint16_t requests;
+  uint16_t validReplies;
+  uint16_t timeouts;
+  uint16_t requestsWithIrq;
+  uint16_t requestsWithMultipleIrqs;
+  uint32_t irqEdges;
+  uint16_t irqLogOverflows;
+  uint16_t cleanupRequired;
+  uint16_t staleItemsBeforeRequest;
+  uint16_t frameListOverflows;
+};
+
+// -----------------------------------------------------------------------------
+// ISR evidence capture
+// -----------------------------------------------------------------------------
+volatile uint32_t g_irqTimesUs[MAX_IRQ_TIMESTAMPS];
+volatile uint8_t  g_irqCount = 0;
+volatile bool     g_irqOverflow = false;
+volatile uint32_t g_totalIrqEdges = 0;
+
+void hc58InterruptHandler() {
+  const uint8_t index = g_irqCount;
+  if (index < MAX_IRQ_TIMESTAMPS) {
+    g_irqTimesUs[index] = micros();
+    g_irqCount = index + 1;
+  } else {
+    g_irqOverflow = true;
+  }
+  g_totalIrqEdges++;
+}
+
+static void resetRequestIrqLog() {
+  noInterrupts();
+  g_irqCount = 0;
+  g_irqOverflow = false;
+  interrupts();
+}
+
+static IrqSnapshot snapshotRequestIrqs() {
+  IrqSnapshot snapshot{};
+
+  noInterrupts();
+  snapshot.count = g_irqCount;
+  snapshot.overflow = g_irqOverflow;
+  for (uint8_t i = 0; i < snapshot.count && i < MAX_IRQ_TIMESTAMPS; ++i) {
+    snapshot.timesUs[i] = g_irqTimesUs[i];
+  }
+  interrupts();
+
+  return snapshot;
+}
 
 static void clearCapture(RequestCapture &capture) {
   memset(&capture, 0, sizeof(capture));
