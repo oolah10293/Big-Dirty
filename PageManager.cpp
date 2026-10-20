@@ -22,6 +22,7 @@ static void (*pageUpdate[PAGE_MAX])() = { nullptr };
 // PAGE CHANGE DEBOUNCE — prevents page switch loops
 static uint32_t blockingInputUntil = 0;
 static uint32_t lastPageChangeTime = 0;
+#define PAGE_SWITCH_GUARD_MS 200
 #define PAGE_CHANGE_DEBOUNCE_MS 500
 
 void PageManager_begin()
@@ -53,8 +54,10 @@ void PageManager_begin()
 
 void PageManager_update()
 {
-    // Ignore all touch input during the post-switch guard window
-    if (millis() < blockingInputUntil) {
+    // A queued page change waits out the touch/SPI guard BEFORE the new
+    // page begin() runs. This keeps the one-shot full redraw away from the
+    // touch event that requested the transition.
+    if (pageChangePending && millis() < blockingInputUntil) {
         Touch_reset();
         return;
     }
@@ -67,7 +70,6 @@ void PageManager_update()
             pageBegin[currentPage]();
         }
         Touch_reset();
-        blockingInputUntil = millis() + 200;
     }
 
     if (millis() - lastPageChangeTime >= PAGE_CHANGE_DEBOUNCE_MS) {
@@ -82,6 +84,7 @@ void PageManager_switchTo(PageID id)
     if (id >= PAGE_MAX) return;
     nextPage = id;
     pageChangePending = true;
+    blockingInputUntil = millis() + PAGE_SWITCH_GUARD_MS;
 }
 
 PageID PageManager_current()

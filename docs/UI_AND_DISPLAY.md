@@ -84,6 +84,21 @@ XPT2046:
 
 `readTouch()` is edge-triggered. PageManager resets the edge detector and adds transition blocking/debounce to prevent one press from skipping pages.
 
+### Post–Save 14 transition fix
+
+After an observed ENV -> PID1 mixed-screen failure, `PageManager.cpp` was changed so the 200 ms touch/SPI guard occurs **before** the destination page's `begin()` function and one-shot full redraw. Save 14 performed the full redraw first and started the 200 ms guard afterward.
+
+Current sequence:
+
+1. page requests a transition
+2. queue destination page and start 200 ms guard
+3. during guard, do not run either page update; reset touch edge state
+4. after guard expires, switch `currentPage`
+5. run destination `begin()` and its full redraw
+6. retain the existing 500 ms debounce before normal destination-page updates
+
+Reason: PID pages redraw their labels only in `begin()`, while later live PID updates redraw only value/unit regions. Deferring the full redraw keeps that one critical label/frame draw away from the touch event that initiated the page change.
+
 ## Common quadrant layout
 
 - left X 0..239

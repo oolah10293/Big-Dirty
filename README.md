@@ -8,7 +8,7 @@ The repository deliberately keeps the Arduino sketch and all .cpp/.h modules in 
 
 ## Authoritative firmware
 
-The authoritative final source is **BigDirty_UI_Main - Save 14**, recovered on **2026-09-16** and identified as the final version.
+The recovered final baseline is **BigDirty_UI_Main - Save 14**, recovered on **2026-09-16** and identified as the final version. Current `main` is Save 14 plus one targeted post-final page-transition fix added on **2026-10-19**.
 
 It contains 31 source files. Compared with the earlier 2026-04-07 GitHub snapshot:
 
@@ -19,7 +19,7 @@ It contains 31 source files. Compared with the earlier 2026-04-07 GitHub snapsho
   - `Page_DTC.cpp`
   - `Page_Env.cpp`
 
-Those four files in the repository now match Save 14 exactly at the Git blob level. See [history/FINAL_SAVE_14_MANIFEST.md](history/FINAL_SAVE_14_MANIFEST.md).
+Those four recovered files still match Save 14 exactly at the Git blob level. `PageManager.cpp` now intentionally differs from Save 14: the 200 ms touch/SPI transition guard runs **before** the destination page's `begin()`/full redraw instead of afterward. This addresses an observed ENV -> PID1 failure where live PID1 values appeared over stale ENV labels. Hardware validation of that fix is pending. See [history/FINAL_SAVE_14_MANIFEST.md](history/FINAL_SAVE_14_MANIFEST.md).
 
 Key final-version changes include:
 

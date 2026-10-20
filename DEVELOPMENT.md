@@ -10,7 +10,7 @@ Big Dirty is an embedded hardware project with several independently sensitive s
 - keep the change if it solves the target problem
 - avoid unrelated cleanup in the same revision
 
-The authoritative baseline is now **BigDirty_UI_Main - Save 14**, identified as the final version.
+The recovered authoritative baseline is **BigDirty_UI_Main - Save 14**, identified as the final version. Current `main` carries a small number of explicitly documented post-final fixes on top of that baseline.
 
 This repository intentionally keeps the .ino, .cpp, and .h files together in the Arduino sketch directory. Do not move them into src/ unless the build workflow is deliberately changed and retested.
 
@@ -48,9 +48,18 @@ The top-level loop:
 
 PageManager stores begin and update function pointers for every page.
 
-Transitions are queued rather than performed immediately. A transition switches on the following PageManager update, runs the new page begin function, resets touch edge state, and blocks touch briefly after the change.
+Transitions are queued rather than performed immediately.
 
-There is also a 500 ms page-change debounce before page updates resume. This behavior was introduced to stop held/stale touch state from skipping multiple pages or creating transition artifacts.
+Current transition order:
+
+1. the active page requests a destination
+2. PageManager starts a 200 ms touch/SPI guard
+3. while the guard is active, page updates are withheld and touch edge state is reset
+4. after the guard expires, PageManager changes `currentPage`
+5. the destination page `begin()` runs and performs its one-shot full redraw
+6. the existing 500 ms page-change debounce elapses before destination-page updates resume
+
+Save 14 originally performed step 5 before the 200 ms guard. That ordering was changed after a photographed ENV -> PID1 failure showed live PID1 values over stale ENV labels. PID labels are only drawn by the page's full `begin()` redraw, so protecting that redraw is intentional.
 
 ## Redraw strategy
 

@@ -2,6 +2,21 @@
 
 This file records milestones supported by retained source, repository history, or confirmed project material.
 
+## 2026-10-19 — Defer page redraw until after touch/SPI guard
+
+Observed failure: PID1 live values (TPS/IAT/MAP/MAF) could appear over the still-visible ENV labels after an ENV -> PID1 transition.
+
+Repository review showed that PID1's labels are drawn only once in `Page_PID1_begin()`; later PID1 updates redraw only the value/unit regions. Therefore a lost or corrupted one-shot transition redraw leaves the page in exactly the photographed mixed state.
+
+Targeted change in `PageManager.cpp`:
+
+- page switch requests now start the 200 ms guard immediately
+- while the guard is active, touch state is reset and the destination page is **not** begun
+- only after the guard expires is `currentPage` changed and the destination page's `begin()`/full redraw executed
+- the existing 500 ms page-update debounce remains unchanged
+
+This is a post–Save 14 fix. Save 14 remains preserved as the recovered final baseline. Hardware validation is pending.
+
 ## 2026-09-16 — Final Save 14 recovered
 
 The exact source archive `BigDirty_UI_Main - Save 14.zip` was supplied and identified as the final version.

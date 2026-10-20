@@ -22,7 +22,7 @@ Compared with the earlier 2026-04-07 GitHub source:
   - Page_DTC.cpp
   - Page_Env.cpp
 
-The root source now matches Save 14.
+The recovered Save 14 source remains the archival baseline. Current `main` intentionally differs in `PageManager.cpp` by one post-final transition fix added on 2026-10-19.
 
 See [../history/FINAL_SAVE_14_MANIFEST.md](../history/FINAL_SAVE_14_MANIFEST.md).
 
@@ -42,6 +42,8 @@ Save 14 additionally makes display SPI transaction ownership explicit and avoids
 ### Touch
 
 The XPT2046 path and page-change reset/debounce logic were developed specifically to stop repeated/ghost page changes from one press.
+
+On 2026-10-19, an observed ENV -> PID1 transition showed valid PID1 values over stale ENV labels. Repository review found no label mix-up in the page source; instead, PID1 labels depend on the single full redraw in `Page_PID1_begin()`. Current `main` therefore defers that destination-page `begin()` until the 200 ms touch/SPI guard has expired. This fix is hardware-validation pending.
 
 ### HC58 live data
 
