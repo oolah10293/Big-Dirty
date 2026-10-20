@@ -61,19 +61,6 @@ static void printFrame(uint16_t requestNumber,
   Serial.println(frame.byteOverflow ? 1 : 0);
 }
 
-struct BatchStats {
-  uint16_t requests;
-  uint16_t validReplies;
-  uint16_t timeouts;
-  uint16_t requestsWithIrq;
-  uint16_t requestsWithMultipleIrqs;
-  uint32_t irqEdges;
-  uint16_t irqLogOverflows;
-  uint16_t cleanupRequired;
-  uint16_t staleItemsBeforeRequest;
-  uint16_t frameListOverflows;
-};
-
 static void clearBatchStats(BatchStats &stats) {
   memset(&stats, 0, sizeof(stats));
 }
