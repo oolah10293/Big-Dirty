@@ -4,6 +4,19 @@ This is one complete standalone diagnostic sketch for the first HC58 interrupt t
 
 The TFT, touch controller, SD card, sensors, warning inputs, dimmer, page manager, and normal Big Dirty application are not used.
 
+## Validation status
+
+The diagnostic has now been run on the actual Big Dirty hardware and live vehicle bus.
+
+Verified results:
+
+- the complete 20/20/20 masked, IRQ+poll, and IRQ-only comparison passed
+- a separate 100-request IRQ-only run completed 100/100 valid MAP replies
+- there were zero timeouts, zero IRQ-log overflows, zero frame-list overflows, and zero fallback cleanups in the 100-request run
+- the test observed unrelated J1850 traffic before and between the request echo and PCM reply, proving production code cannot infer frame identity from interrupt order
+
+See [RESULTS_2026-10-23.md](RESULTS_2026-10-23.md). The compressed original serial logs are preserved under [results/](results/).
+
 ## What the one sketch does
 
 After USB Serial opens, it automatically runs all three comparison modes with 20 Mode 01 PID 0B (MAP) requests per mode:
@@ -45,8 +58,8 @@ The existing interface board level-shifts the Rev C module’s 5 V logic to the 
 1. Open `BigDirty_HC58_INT_Diagnostic/BigDirty_HC58_INT_Diagnostic.ino` in Arduino IDE.
 2. Select Teensy 4.1 and USB type Serial.
 3. Upload it.
-4. Open USB Serial Monitor at 115200 baud.
-5. The sketch waits for the monitor, counts down three seconds, and runs the full test automatically.
+4. Open a serial terminal at 115200 baud.
+5. The sketch waits for the terminal, counts down three seconds, and runs the full test automatically.
 6. Keep the vehicle/J1850 bus in the same active condition for all three batches.
 
 The full automatic run takes about one minute.
