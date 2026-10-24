@@ -1,73 +1,26 @@
 #include "DTC_Manager.h"
 
 #include <Arduino.h>
-#include <SPI.h>
 #include <string.h>
 
-// ============================================================
-// Teensy 4.1 <-> HC58 wiring
-// ============================================================
-static const int PIN_INT  = 0;
-static const int PIN_MISO = 1;
-static const int PIN_RST  = 24;
-static const int PIN_CS   = 25;
-static const int PIN_MOSI = 26;
-static const int PIN_SCK  = 27;
+namespace {
 
-// ============================================================
-// HC58 / SPI settings
-// ============================================================
-static const uint32_t SPI_HZ      = 100000;
-static const uint32_t CS_SETUP_US = 40;
-static const uint32_t CS_HOLD_US  = 40;
+constexpr uint32_t PRETX_HUSH_READ_MS    = 250;
+constexpr uint32_t OBSERVE_READ_MS       = 800;
+constexpr uint32_t CLEAR_LISTEN_TOTAL_MS = 5000;
+constexpr uint32_t POST_CLEAR_DELAY_MS   = 250;
+constexpr uint32_t TX_TIMEOUT_MS         = 250;
 
-// ============================================================
-// Timing
-// ============================================================
-static const uint32_t POSTTX_US             = 8300;
-static const uint32_t EOD_US                = 750;
-static const uint32_t DRAIN_MS_READ         = 800;
-static const uint32_t DRAIN_MS_CLEAR        = 400;
-static const uint32_t PRETX_HUSH_READ_MS    = 250;
-static const uint32_t POST_CLEAR_DELAY_MS   = 250;
-static const uint32_t CLEAR_LISTEN_TOTAL_MS = 5000;
+constexpr int TRAFFIC_ERROR_MAX = 20;
+constexpr int TRAFFIC_NONE_MIN  = 50;
+constexpr int MAX_CODES = 8;
 
-// ============================================================
-// Traffic heuristics for no-code detection
-// ============================================================
-static const int TRAFFIC_ERROR_MAX = 20;   // 0-20  -> read error
-static const int TRAFFIC_NONE_MIN  = 50;   // 50+   -> alive/no codes
-
-// ============================================================
-// DTC manager state
-// ============================================================
-static DTCState dtcState = DTC_STATE_UNREAD;
-
-static const int MAX_CODES = 8;
-static char rawDtcList[MAX_CODES][8];
-static char dtcList[MAX_CODES][48];
-static int dtcCount = 0;
-
-static bool hc58Ready = false;
-static bool readPending = false;
-static bool clearPending = false;
-static bool firstUpdateAfterEnter = false;
-static bool postClearRead = false;
-
-// RX buffer
-static uint8_t rx[256];
-static int rxLen = 0;
-
-// ============================================================
-// Generic code lookup table (Phase 1 curated list)
-// ============================================================
 struct DTCLabel {
     const char* code;
     const char* label;
 };
 
-static const DTCLabel kKnownDTCs[] = {
-    // Air / load / throttle / temp
+const DTCLabel kKnownDTCs[] = {
     {"P0101", "MAF RANGE"},
     {"P0102", "MAF LOW"},
     {"P0103", "MAF HIGH"},
@@ -84,7 +37,6 @@ static const DTCLabel kKnownDTCs[] = {
     {"P0123", "TPS HIGH"},
     {"P0128", "COOLANT TEMP"},
 
-    // Upstream O2 / fueling
     {"P0131", "O2 B1S1 LOW"},
     {"P0132", "O2 B1S1 HIGH"},
     {"P0133", "O2 B1S1 SLOW"},
@@ -96,7 +48,6 @@ static const DTCLabel kKnownDTCs[] = {
     {"P0174", "SYSTEM LEAN B2"},
     {"P0175", "SYSTEM RICH B2"},
 
-    // Misfire
     {"P0300", "RANDOM MISFIRE"},
     {"P0301", "MISFIRE CYL 1"},
     {"P0302", "MISFIRE CYL 2"},
@@ -107,7 +58,6 @@ static const DTCLabel kKnownDTCs[] = {
     {"P0307", "MISFIRE CYL 7"},
     {"P0308", "MISFIRE CYL 8"},
 
-    // Transmission
     {"P0700", "TRANS CTRL SYS"},
     {"P0716", "INPUT SPEED RANGE"},
     {"P0717", "INPUT SPEED NO SIG"},
@@ -121,64 +71,97 @@ static const DTCLabel kKnownDTCs[] = {
     {"P0785", "SHIFT/TIME SOL"},
 };
 
-static const int kKnownDTCCount = sizeof(kKnownDTCs) / sizeof(kKnownDTCs[0]);
+constexpr int kKnownDTCCount = sizeof(kKnownDTCs) / sizeof(kKnownDTCs[0]);
 
-// ============================================================
-// Helpers
-// ============================================================
-static void clearLocalCodes() {
-    for (int i = 0; i < MAX_CODES; i++) {
+enum class Operation : uint8_t {
+    Idle = 0,
+    StartRead,
+    Hush03,
+    WaitTx03,
+    Observe03,
+    Hush07,
+    WaitTx07,
+    Observe07,
+    Classify,
+    StartClear,
+    WaitTx04,
+    ClearListen,
+    PostClearDelay
+};
+
+struct ServiceResult {
+    int trafficItems;
+    bool positive;
+    bool negative;
+    bool decodeError;
+};
+
+DTCState dtcState = DTC_STATE_UNREAD;
+Operation operation = Operation::Idle;
+bool pageActive = false;
+bool firstUpdateAfterEnter = false;
+bool postClearRead = false;
+uint8_t readPass = 0;
+uint32_t deadlineMs = 0;
+uint32_t trafficStart = 0;
+uint8_t requestBytes[5] = {0};
+uint8_t activeService = 0;
+
+ServiceResult result03{};
+ServiceResult result07{};
+
+char rawDtcList[MAX_CODES][8];
+char dtcList[MAX_CODES][48];
+int dtcCount = 0;
+
+bool deadlineReached(uint32_t deadline) {
+    return static_cast<int32_t>(millis() - deadline) >= 0;
+}
+
+void resetServiceResult(ServiceResult &result) {
+    result.trafficItems = 0;
+    result.positive = false;
+    result.negative = false;
+    result.decodeError = false;
+}
+
+void clearLocalCodes() {
+    for (int i = 0; i < MAX_CODES; ++i) {
         rawDtcList[i][0] = '\0';
         dtcList[i][0] = '\0';
     }
     dtcCount = 0;
 }
 
-static const char* findDTCLabel(const char* code) {
+const char *findDTCLabel(const char* code) {
     if (!code || !code[0]) return nullptr;
-
-    for (int i = 0; i < kKnownDTCCount; i++) {
+    for (int i = 0; i < kKnownDTCCount; ++i) {
         if (strcmp(code, kKnownDTCs[i].code) == 0) {
             return kKnownDTCs[i].label;
         }
     }
-
     return nullptr;
 }
 
-static void buildDisplayDTC(const char* rawCode, char* out, size_t outSize) {
+void buildDisplayDTC(const char *rawCode, char *out, size_t outSize) {
     if (!rawCode || !out || outSize == 0) return;
-
     const char* label = findDTCLabel(rawCode);
-    if (label) {
-        snprintf(out, outSize, "%s - %s", rawCode, label);
-    } else {
-        snprintf(out, outSize, "%s", rawCode);
-    }
+    if (label) snprintf(out, outSize, "%s - %s", rawCode, label);
+    else snprintf(out, outSize, "%s", rawCode);
 }
 
-static bool hasRawCode(const char* rawCode) {
+bool hasRawCode(const char* rawCode) {
     if (!rawCode || !rawCode[0]) return false;
-
-    for (int i = 0; i < dtcCount; i++) {
-        if (strcmp(rawDtcList[i], rawCode) == 0) {
-            return true;
-        }
+    for (int i = 0; i < dtcCount; ++i) {
+        if (strcmp(rawDtcList[i], rawCode) == 0) return true;
     }
-
     return false;
 }
 
-static bool addDTCUnique(const char* rawCode) {
+bool addDTCUnique(const char *rawCode) {
     if (!rawCode || !rawCode[0]) return false;
-
-    if (hasRawCode(rawCode)) {
-        return true;
-    }
-
-    if (dtcCount >= MAX_CODES) {
-        return true; // silently cap list
-    }
+    if (hasRawCode(rawCode)) return true;
+    if (dtcCount >= MAX_CODET) return true;
 
     snprintf(rawDtcList[dtcCount], sizeof(rawDtcList[dtcCount]), "%s", rawCode);
     buildDisplayDTC(rawCode, dtcList[dtcCount], sizeof(dtcList[dtcCount]));
@@ -186,400 +169,362 @@ static bool addDTCUnique(const char* rawCode) {
     return true;
 }
 
-static void SPIcycle(uint8_t cmd, uint8_t data, uint8_t &status, uint8_t &resp) {
-    digitalWrite(PIN_CS, LOW);
-    delayMicroseconds(CS_SETUP_US);
-    status = SPI1.transfer(cmd);
-    resp   = SPI1.transfer(data);
-    digitalWrite(PIN_CS, HIGH);
-    delayMicroseconds(CS_HOLD_US);
-}
-
-static void hc58_init() {
-    uint8_t s, d;
-
-    digitalWrite(PIN_RST, LOW);
-    delay(40);
-    digitalWrite(PIN_RST, HIGH);
-    delay(120);
-
-    SPIcycle(0x12, 0x1A, s, d);   // CCR-first
-    SPIcycle(0x10, 0xC0, s, d);   // RENA + TENA
-}
-
-static void hc58_beginIfNeeded() {
-    if (hc58Ready) return;
-
-    pinMode(PIN_INT, INPUT);
-    pinMode(PIN_RST, OUTPUT);
-    pinMode(PIN_CS, OUTPUT);
-
-    digitalWrite(PIN_CS, HIGH);
-    digitalWrite(PIN_RST, HIGH);
-
-    SPI1.setMISO(PIN_MISO);
-    SPI1.setMOSI(PIN_MOSI);
-    SPI1.setSCK(PIN_SCK);
-    SPI1.begin();
-    SPI1.beginTransaction(SPISettings(SPI_HZ, MSBFIRST, SPI_MODE3));
-
-    hc58_init();
-    hc58Ready = true;
-}
-
-static void sendHeader_Functional() {
-    uint8_t s, d;
-    SPIcycle(0x68, 0x14, s, d);
-    SPIcycle(0x6A, 0x04, s, d);
-    SPIcycle(0xF1, 0x04, s, d);
-}
-
-static void sendReadService(uint8_t service) {
-    uint8_t s, d;
-
-    delay(PRETX_HUSH_READ_MS);
-    sendHeader_Functional();
-
-    SPIcycle(service, 0x0C, s, d);
-    SPIcycle(0x00,   0x0C, s, d);
-}
-
-static void send03() {
-    sendReadService(0x03);
-}
-
-static void send07() {
-    sendReadService(0x07);
-}
-
-static void send04() {
-    uint8_t s, d;
-
-    sendHeader_Functional();
-
-    SPIcycle(0x04, 0x0C, s, d);
-    SPIcycle(0x00, 0x0C, s, d);
-}
-
-static int drain(unsigned winMs) {
-    uint8_t s, d;
-    rxLen = 0;
-
-    unsigned long t0 = millis();
-
-    while ((millis() - t0) < winMs && rxLen < (int)sizeof(rx)) {
-        SPIcycle(0x00, 0x02, s, d);
-        if (s != 0x00 && s != 0x10) {
-            rx[rxLen++] = d;
-        }
-    }
-
-    return rxLen;
-}
-
-static bool findPositiveReply(uint8_t service, int &idx) {
-    idx = -1;
-    uint8_t positiveSid = (uint8_t)(service + 0x40);
-
-    for (int i = 0; i < rxLen - 4; i++) {
-        if (rx[i]     == 0x48 &&
-            rx[i + 1] == 0x6B &&
-            rx[i + 2] == 0x10 &&
-            rx[i + 3] == positiveSid) {
-            idx = i;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool findNegativeReply(uint8_t service, int &idx, uint8_t &reason) {
-    idx = -1;
-    reason = 0x00;
-
-    for (int i = 0; i < rxLen - 5; i++) {
-        if (rx[i]     == 0x48 &&
-            rx[i + 1] == 0x6B &&
-            rx[i + 2] == 0x10 &&
-            rx[i + 3] == 0x7F &&
-            rx[i + 4] == service) {
-
-            idx = i;
-            reason = rx[i + 5];
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static bool formatRawDTC(uint8_t hi, uint8_t lo, char *out, size_t outSize) {
+bool formatRawDTC(uint8_t hi, uint8_t lo, char *out, size_t outSize) {
     if (!out || outSize == 0) return false;
-
     static const char sysMap[4] = {'P','C','B','U'};
-
-    char system = sysMap[(hi >> 6) & 0x03];
-    int d1 = (hi >> 4) & 0x03;
-    int d2 = hi & 0x0F;
-    int d3 = (lo >> 4) & 0x0F;
-    int d4 = lo & 0x0F;
-
+    const char system = sysMap[(hi >> 6) & 0x03];
+    const int d1 = (hi >> 4) & 0x03;
+    const int d2 = hi & 0x0F;
+    const int d3 = (lo >> 4) & 0x0F;
+    const int d4 = lo & 0x0F;
     snprintf(out, outSize, "%c%d%X%X%X", system, d1, d2, d3, d4);
     return true;
 }
 
-static bool decodeDTCsFromReply(int startIdx) {
-    int firstPair = startIdx + 4;
+bool decodeDTCsFromFrame(const HC58Transport::Frame &frame, uint8_t startIdx) {
+    const uint8_t firstPair = startIdx + 4;
+    if (firstPair >= frame.length) return false;
 
-    if (firstPair >= rxLen) {
-        return false;
-    }
-
-    for (int i = firstPair; i + 1 < rxLen; i += 2) {
-        uint8_t hi = rx[i];
-        uint8_t lo = rx[i + 1];
-
-        if (hi == 0x00 && lo == 0x00) {
-            break;
-        }
+    for (uint8_t i = firstPair; i + 1 < frame.length; i += 2) {
+        const uint8_t hi = frame.bytes[i];
+        const uint8_t lo = frame.bytes[i + 1];
+        if (hi == 0x00 && lo == 0x00) break;
 
         char rawCode[8];
-        if (!formatRawDTC(hi, lo, rawCode, sizeof(rawCode))) {
-            return false;
-        }
-
-        if (!addDTCUnique(rawCode)) {
+        if (!formatRawDTC(hi, lo, rawCode, sizeof(rawCode)) ||
+            !addDTCUnique(rawCode)) {
             return false;
         }
     }
-
     return true;
 }
 
-struct ReadAttemptResult {
-    int len;
-    bool positive;
-    bool negative;
-};
-
-static ReadAttemptResult performReadAndMerge(uint8_t service) {
-    ReadAttemptResult r;
-    r.len = 0;
-    r.positive = false;
-    r.negative = false;
-
-    if (service == 0x03) {
-        send03();
-    } else {
-        send07();
-    }
-
-    delayMicroseconds(POSTTX_US + EOD_US);
-    r.len = drain(DRAIN_MS_READ);
-
-    int negIdx = -1;
-    uint8_t negReason = 0x00;
-    if (findNegativeReply(service, negIdx, negReason)) {
-        r.negative = true;
-    }
-
-    int posIdx = -1;
-    if (findPositiveReply(service, posIdx)) {
-        r.positive = true;
-        if (!decodeDTCsFromReply(posIdx)) {
-            r.negative = false;
-            r.positive = false;
-            r.len = -1;
-        }
-    }
-
-    return r;
+void releaseTransport() {
+    HC58Transport::release(HC58Transport::Client::DTC);
 }
 
-static bool classifyNoRepliesInitial(int len03, int len07) {
-    int bestLen = (len03 > len07) ? len03 : len07;
+void finishOperation(DTCState finalState) {
+    operation = Operation::Idle;
+    dtcState = finalState;
+    activeService = 0;
+    releaseTransport();
+}
 
-    if (bestLen >= TRAFFIC_NONE_MIN) {
-        dtcState = DTC_STATE_NONE;
-        return true;
-    }
+void failOperation(DTCState failureState = DTC_STATE_ERROR) {
+    clearLocalCodes();
+    finishOperation(failureState);
+}
 
-    if (len03 <= TRAFFIC_ERROR_MAX && len07 <= TRAFFIC_ERROR_MAX) {
-        dtcState = DTC_STATE_ERROR;
-        return false;
-    }
+bool claimTransport() {
+    return HC58Transport::claim(HC58Transport::Client::DTC);
+}
+
+void resetReadResults() {
+    resetServiceResult(result03);
+    resetServiceResult(result07);
+}
+
+void beginReadSequence(bool afterClear) {
+    if (!claimTransport()) return;
 
     clearLocalCodes();
+    resetReadResults();
+    readPass = 0;
+    postClearRead = afterClear;
+    dtcState = DTC_STATE_READING;
+    operation = Operation::Hush03;
+    deadlineMs = millis() + PRETX_HUSH_READ_MS;
+}
 
-    ReadAttemptResult r03 = performReadAndMerge(0x03);
-    if (r03.len < 0) {
-        dtcState = DTC_STATE_ERROR;
-        return false;
+void beginRetrySequence() {
+    clearLocalCodes();
+    resetReadResults();
+    readPass = 1;
+    operation = Operation::Hush03;
+    deadlineMs = millis() + PRETX_HUSH_READ_MS;
+}
+
+void buildServiceRequest(uint8_t service) {
+    requestBytes[0] = 0x68;
+    requestBytes[1] = 0x6A;
+    requestBytes[2] = 0xF1;
+    requestBytes[3] = service;
+    requestBytes[4] = 0x00;
+}
+
+void sendServiceRequest(uint8_t service, Operation waitState) {
+    activeService = service;
+    buildServiceRequest(service);
+    trafficStart = HC58Transport::snapshotStats().nonEmptyRxItems;
+
+    if (!HC58Transport::sendFrame(HC58Transport::Client::DTC,
+                                  requestBytes, sizeof(requestBytes))) {
+        failOperation();
+        return;
     }
 
-    ReadAttemptResult r07 = performReadAndMerge(0x07);
-    if (r07.len < 0) {
-        dtcState = DTC_STATE_ERROR;
-        return false;
+    operation = waitState;
+    deadlineMs = millis() + TX_TIMEOUT_MS;
+}
+
+bool exactRequestEcho(const HC58Transport::Frame &frame) {
+    return frame.length == sizeof(requestBytes) &&
+           memcmp(frame.bytes, requestBytes, sizeof(requestBytes)) == 0;
+}
+
+int findPositiveReply(const HC58Transport::Frame &frame, uint8_t service) {
+    const uint8_t positiveSid = service + 0x40;
+    for (uint8_t i = 0; i + 3 < frame.length; ++i) {
+        if (frame.bytes[i]     == 0x48 &&
+            frame.bytes[i + 1] == 0x6B &&
+            frame.bytes[i + 2] == 0x10 &&
+            frame.bytes[i + 3] == positiveSid) {
+            return i;
+        }
     }
+    return -1;
+}
 
-    if (dtcCount > 0) {
-        dtcState = DTC_STATE_PRESENT;
-        return true;
+bool isNegativeReply(const HC58Transport::Frame &frame, uint8_t service) {
+    for (uint8_t i = 0; i + 5 < frame.length; ++i) {
+        if (frame.bytes[i]     == 0x48 &&
+            frame.bytes[i + 1] == 0x6B &&
+            frame.bytes[i + 2] == 0x10 &&
+            frame.bytes[i + 3] == 0x7F &&
+            frame.bytes[i + 4] == service) {
+            return true;
+        }
     }
-
-    if (r03.negative || r07.negative) {
-        dtcState = DTC_STATE_REQUEST_ERROR;
-        return false;
-    }
-
-    int bestLen2 = r03.len;
-    if (r07.len > bestLen2) bestLen2 = r07.len;
-
-    if (bestLen2 >= TRAFFIC_NONE_MIN) {
-        dtcState = DTC_STATE_NONE;
-        return true;
-    }
-
-    dtcState = DTC_STATE_ERROR;
     return false;
 }
 
-static bool classifyNoRepliesPostClear(int len03, int len07) {
-    int bestLen = (len03 > len07) ? len03 : len07;
-
-    if (bestLen >= (TRAFFIC_ERROR_MAX + 1)) {
-        dtcState = DTC_STATE_NONE;
-        return true;
-    }
-
-    dtcState = DTC_STATE_ERROR;
-    return false;
+ServiceResult &resultForService(uint8_t service) {
+    return service == 0x03 ? result03 : result07;
 }
 
-static bool doCombinedRead() {
-    if (!hc58Ready) {
-        hc58_beginIfNeeded();
-        if (!hc58Ready) {
-            dtcState = DTC_STATE_ERROR;
-            return false;
-        }
-    }
+void closeObservation(ServiceResult &result) {
+    const uint32_t nowItems = HC58Transport::snapshotStats().nonEmptyRxItems;
+    const uint32_t delta = nowItems - trafficStart;
+    result.trafficItems = delta > 0x7FFFFFFFUL ? 0x7FFFFFFF : static_cast<int>(delta);
+}
 
-    clearLocalCodes();
-
-    ReadAttemptResult r03 = performReadAndMerge(0x03);
-    if (r03.len < 0) {
-        clearLocalCodes();
-        dtcState = DTC_STATE_ERROR;
-        return false;
-    }
-
-    ReadAttemptResult r07 = performReadAndMerge(0x07);
-    if (r07.len < 0) {
-        clearLocalCodes();
-        dtcState = DTC_STATE_ERROR;
-        return false;
-    }
-
-    if (r03.len <= 0 && r07.len <= 0) {
-        clearLocalCodes();
-        dtcState = DTC_STATE_ERROR;
-        return false;
+void classifyRead() {
+    if (result03.decodeError || result07.decodeError) {
+        failOperation();
+        return;
     }
 
     if (dtcCount > 0) {
-        dtcState = DTC_STATE_PRESENT;
-        return true;
+        finishOperation(DTC_STATE_PRESENT);
+        return;
     }
 
-    if (r03.negative || r07.negative) {
-        dtcState = DTC_STATE_REQUEST_ERROR;
-        return false;
+    if (result03.negative || r07.negative) {
+        finishOperation(DTC_STATE_REQUEST_ERROR);
+        return;
     }
+
+    if (result03.trafficItems <= 0 && result07.trafficItems <= 0) {
+        failOperation();
+        return;
+    }
+
+    const int bestTraffic = result03.trafficItems > result07.trafficItems
+        ? result03.trafficItems : result07.trafficItems;
 
     if (postClearRead) {
-        return classifyNoRepliesPostClear(r03.len, r07.len);
+        finishOperation(bestTraffic >= (TRAFFIC_ERROR_MAX + 1)
+            ? DTC_STATE_NONE : DTC_STATE_ERROR);
+        return;
     }
 
-    return classifyNoRepliesInitial(r03.len, r07.len);
+    if (bestTraffic >= TRAFFIC_NONE_MIN) {
+        finishOperation(DTC_STATE_NONE);
+        return;
+    }
+
+    if (readPass == 0 &&
+        !(result03.trafficItems <= TRAFFIC_ERROR_MAX &&
+          result07.trafficItems <= TRAFFIC_ERROR_MAX)) {
+        beginRetrySequence();
+        return;
+    }
+
+    finishOperation(DTC_STATE_ERROR);
 }
 
-static void doMode04ClearThenReread() {
-    if (!hc58Ready) {
-        hc58_beginIfNeeded();
-        if (!hc58Ready) {
-            dtcState = DTC_STATE_ERROR;
-            return;
-        }
-    }
+}  // namespace
 
-    send04();
-    delayMicroseconds(POSTTX_US + EOD_US);
-
-    unsigned long t0 = millis();
-    while ((millis() - t0) < CLEAR_LISTEN_TOTAL_MS) {
-        drain(DRAIN_MS_CLEAR);
-        delay(50);
-    }
-
-    delay(POST_CLEAR_DELAY_MS);
-
-    postClearRead = true;
-    doCombinedRead();
-    postClearRead = false;
-}
-
-// ============================================================
-// Public API
-// ============================================================
 void DTCManager_begin() {
     dtcState = DTC_STATE_UNREAD;
-    clearLocalCodes();
-    readPending = false;
-    clearPending = false;
+    operation = Operation::Idle;
+    pageActive = false;
     firstUpdateAfterEnter = false;
     postClearRead = false;
-    hc58_beginIfNeeded();
+    clearLocalCodes();
+    resetReadResults();
 }
 
 void DTCManager_enterPage() {
-    clearLocalCodes();
-    dtcState = DTC_STATE_READING;
-    readPending = true;
-    clearPending = false;
+    DTCManager_leavePage();
+    pageActive = true;
     firstUpdateAfterEnter = true;
     postClearRead = false;
+    clearLocalCodes();
+    resetReadResults();
+    dtcState = DTC_STATE_READING;
+    operation = Operation::StartRead;
 }
 
-void DTCManager_requestClear() {
-    if (dtcState != DTC_STATE_PRESENT) return;
-
-    clearLocalCodes();
-    dtcState = DTC_STATE_CLEARING;
-    clearPending = true;
-    readPending = false;
-    postClearRead = false;
+void DTCManager_leavePage() {
+    pageActive = false;
+    firstUpdateAfterEnter = false;
+    operation = Operation::Idle;
+    activeService = 0;
+    releaseTransport();
 }
 
 void DTCManager_update() {
-    if (readPending) {
-        if (firstUpdateAfterEnter) {
-            firstUpdateAfterEnter = false;
-            return;   // allow page to show --- DTC CODES first
-        }
+    if (!pageActive) return;
 
-        readPending = false;
-        doCombinedRead();
+    if (firstUpdateAfterEnter) {
+        firstUpdateAfterEnter = false;
         return;
     }
 
-    if (clearPending) {
-        clearPending = false;
-        dtcState = DTC_STATE_READING;   // visually use ---
-        doMode04ClearThenReread();
+    switch (operation) {
+        case Operation::Idle:
+            return;
+
+        case Operation::StartRead:
+            beginReadSequence(false);
+            return;
+
+        case Operation::Hush03:
+            if (deadlineReached(deadlineMs)) {
+                sendServiceRequest(0x03, Operation::WaitTx03);
+            }
+            return;
+
+        case Operation::WaitTx03:
+        case Operation::WaitTx07:
+        case Operation::WaitTx04:
+            if (deadlineReached(deadlineMs)) {
+
+                failOperation();
+            }
+            return;
+
+        case Operation::Observe03:
+            if (deadlineReached(deadlineMs)) {
+                closeObservation(result03);
+                operation = Operation::Hush07;
+                deadlineMs = millis() + PRETX_HUSH_READ_MS;
+            }
+            return;
+
+        case Operation::Hush07:
+            if (deadlineReached(deadlineMs)) {
+                sendServiceRequest(0x07, Operation::WaitTx07);
+            }
+            return;
+
+        case Operation::Observe07:
+            if (deadlineReached(deadlineMs)) {
+                closeObservation(result07);
+                operation = Operation::Classify;
+            }
+            return;
+
+        case Operation::Classify:
+            classifyRead();
+            return;
+
+        case Operation::StartClear:
+            if (!claimTransport()) return;
+            sendServiceRequest(0x04, Operation::WaitTx04);
+            return;
+
+        case Operation::ClearListen:
+            if (deadlineReached(deadlineMs)) {
+                operation = Operation::PostClearDelay;
+                deadlineMs = millis() + POST_CLEAR_DELAY_MS;
+            }
+            return;
+
+        case Operation::PostClearDelay:
+            if (deadlineReached(deadlineMs)) {
+                beginReadSequence(true);
+            }
+            return;
+    }
+}
+
+void DTCManager_requestClear() {
+    if (!pageActive || dtcState != DTC_STATE_PRESENT) return;
+
+    clearLocalCodes();
+    resetReadResults();
+    postClearRead = false;
+    dtcState = DTC_STATE_CLEARING;
+    operation = Operation::StartClear;
+}
+
+void DTCManager_onHc58Frame(const HC58Transport::Frame &frame) {
+    if (!pageActive || operation == Operation::Idle ||
+        !HC58Transport::isOwnedBy(HC58Transport::Client::DTC)) {
         return;
+    }
+
+    if (frame.completion.rxFifoOverrun) {
+        failOperation();
+        return;
+    }
+
+    const bool waitingForTx = operation == Operation::WaitTx03 ||
+                              operation == Operation::WaitTx07 ||
+                              operation == Operation::WaitTx04;
+
+    if (waitingForTx && exactRequestEcho(frame)) {
+        if (frame.truncated || frame.completion.error ||
+            frame.completion.txStatus == HC58Transport::TxStatus::Underrun) {
+            failOperation();
+            return;
+        }
+
+        if (frame.completion.txStatus == HC58Transport::TxStatus::Successful) {
+            if (operation == Operation::WaitTx03) {
+                operation = Operation::Observe03;
+                deadlineMs = millis() + OBSERVE_READ_MS;
+            } else if (operation == Operation::WaitTx07) {
+                operation = Operation::Observe07;
+                deadlineMs = millis() + OBSERVE_READ_MS;
+            } else {
+                operation = Operation::ClearListen;
+                deadlineMs = millis() + CLEAR_LISTEN_TOTAL_MS;
+            }
+        }
+        // Lost arbitration is left to the HC58's automatic retry.
+        return;
+    }
+
+    const bool observing = operation == Operation::Observe03 ||
+                           operation == Operation::Observe07;
+    if (!observing || frame.truncated || frame.completion.error) return;
+
+    const uint8_t service = operation == Operation::Observe03 ? 0x03 : 0x07;
+    ServiceResult &result = resultForService(service);
+
+    const int positiveIndex = findPositiveReply(frame, service);
+    if (positiveIndex >= 0) {
+        result.positive = true;
+        if (!decodeDTCsFromFrame(frame, static_cast<uint8_t>(positiveIndex))) {
+            result.decodeError = true;
+        }
+    }
+
+    if (isNegativeReply(frame, service)) {
+        result.negative = true;
     }
 }
 
@@ -597,5 +542,5 @@ const char* DTCManager_getCode(int index) {
 }
 
 bool DTCManager_showClearButton() {
-    return (dtcState == DTC_STATE_PRESENT);
+    return dtcState == DTC_STATE_PRESENT;
 }

@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "PageManager.h"
+#include "HC58_Transport.h"
 
 enum PIDSlot {
     PID_SLOT_Q1 = 0,
@@ -15,6 +16,7 @@ enum PIDSlot {
 void PIDManager_begin();
 void PIDManager_setPage(PageID page);
 void PIDManager_update();
+void PIDManager_onHc58Frame(const HC58Transport::Frame &frame);
 
 bool PIDManager_isValid(PIDSlot slot);
 const char* PIDManager_getValue(PIDSlot slot);

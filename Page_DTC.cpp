@@ -192,7 +192,7 @@ static void drawButton() {
     fillRect(BUTTON_X0, BUTTON_Y1 - 2, BUTTON_X1, BUTTON_Y1, br);
     fillRect(BUTTON_X1 - 2, BUTTON_Y0, BUTTON_X1, BUTTON_Y1, br);
 
-    const char* txt = "CLEAR";
+    const char *txt = "CLEAR";
     int w = measureTextWidth(txt, FONT_FUR_CAPS_5x7, 3);
     int x = (480 - w) / 2;
     int y = BUTTON_Y0 + 12;
@@ -239,6 +239,11 @@ void Page_DTC_begin() {
 void Page_DTC_update() {
     DTCManager_update();
     syncDTCPageIfNeeded();
+
+    DTCState state = DTCManager_getState();
+    if (state == DTC_STATE_READING || state == DTC_STATE_CLEARING) {
+        return;
+    }
 
     TouchPoint tp = readTouch();
     if (!tp.touched) return;

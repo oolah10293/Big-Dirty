@@ -1,494 +1,313 @@
 #include "PID_Manager.h"
 
 #include <Arduino.h>
-#include <SPI.h>
 #include <string.h>
 
-// ============================================================
-// Teensy 4.1 <-> HC58 wiring
-// ============================================================
-static const int PIN_INT  = 0;
-static const int PIN_MISO = 1;
-static const int PIN_RST  = 24;
-static const int PIN_CS   = 25;
-static const int PIN_MOSI = 26;
-static const int PIN_SCK  = 27;
+namespace {
 
-// ============================================================
-// HC58 / SPI settings
-// ============================================================
-static const uint32_t SPI_HZ      = 100000;
-static const uint32_t CS_SETUP_US = 40;
-static const uint32_t CS_HOLD_US  = 40;
+constexpr uint16_t POLL_GAP_MS = 10;
+constexpr uint16_t TX_TIMEOUT_MS = 250;
+constexpr uint16_t RESPONSE_TIMEOUT_MS = 250;
 
-// ============================================================
-// Timing — aligned with your working sketch
-// ============================================================
-static const uint32_t POSTTX_MS      = 9;
-static const uint16_t EOD_US         = 750;
-static const uint16_t QUIET_GAP_MS   = 15;
-static const uint16_t MAX_CAPTURE_MS = 80;
-static const uint16_t POLL_GAP_MS    = 10;
+constexpr uint8_t PID_CALC_LOAD = 0x04;
+constexpr uint8_t PID_STFT1     = 0x06;
+constexpr uint8_t PID_LTFT1     = 0x07;
+constexpr uint8_t PID_STFT2     = 0x08;
+constexpr uint8_t PID_LTFT2     = 0x09;
+constexpr uint8_t PID_MAP       = 0x0B;
+constexpr uint8_t PID_TIMING    = 0x0E;
+constexpr uint8_t PID_IAT       = 0x0F;
+constexpr uint8_t PID_MAF       = 0x10;
+constexpr uint8_t PID_TPS       = 0x11;
+constexpr uint8_t PID_O2_B1     = 0x14;
+constexpr uint8_t PID_O2_B2     = 0x15;
 
-// ============================================================
-// Mode 01 PIDs
-// ============================================================
-static const uint8_t PID_CALC_LOAD = 0x04;
-static const uint8_t PID_MAP       = 0x0B;
-static const uint8_t PID_IAT       = 0x0F;
-static const uint8_t PID_MAF       = 0x10;
-static const uint8_t PID_TPS       = 0x11;
-static const uint8_t PID_TIMING    = 0x0E;
-static const uint8_t PID_O2_B1     = 0x14;
-static const uint8_t PID_O2_B2     = 0x15;
-static const uint8_t PID_STFT1     = 0x06;
-static const uint8_t PID_LTFT1     = 0x07;
-static const uint8_t PID_STFT2     = 0x08;
-static const uint8_t PID_LTFT2     = 0x09;
+enum class RequestState : uint8_t {
+    Idle = 0,
+    WaitTxEcho,
+    WaitResponse
+};
 
-// ============================================================
-// Manager state
-// ============================================================
-static PageID activePage = PAGE_BOOTLOGO;
+PageID activePage = PAGE_BOOTLOGO;
+char slotValues[PID_SLOT_COUNT][8];
+bool slotValid[PID_SLOT_COUNT];
 
-static char slotValues[PID_SLOT_COUNT][8];
-static bool slotValid[PID_SLOT_COUNT];
+RequestState requestState = RequestState::Idle;
+uint8_t requestedPid = 0;
+PIDSlot requestedSlot = PID_SLOT_Q1;
+uint8_t requestBytes[5] = {0};
+uint32_t requestDeadlineMs = 0;
+uint32_t nextPollMs = 0;
+uint8_t pollIndex = 0;
 
-static bool hc58Ready = false;
-static uint32_t nextPollMs = 0;
+bool deadlineReached(uint32_t deadline) {
+    return static_cast<int32_t>(millis() - deadline) >= 0;
+}
 
-// Shared page-local round-robin index
-// PAGE_PID1: 0=TPS, 1=IAT, 2=MAP, 3=MAF
-// PAGE_PID2: 0=Load, 1=Timing, 2=O2 B1, 3=O2 B2
-static uint8_t pollIndex = 0;
+bool isPidPage(PageID page) {
+    return page == PAGE_PID1 || page == PAGE_PID2 || page == PAGE_PID3;
+}
 
-// RX buffers
-static uint8_t frame[128];
-static int frameLen = 0;
-
-static uint8_t cleanResp[16];
-static int cleanRespLen = 0;
-
-// ============================================================
-// Helpers
-// ============================================================
-static void copyValue(char *dst, const char *src, size_t dstSize) {
+void copyValue(char *dst, const char *src, size_t dstSize) {
     if (!dst || !src || dstSize == 0) return;
     snprintf(dst, dstSize, "%s", src);
 }
 
-static void clearAllSlots() {
-    for (int i = 0; i < PID_SLOT_COUNT; i++) {
+void clearAllSlots() {
+    for (int i = 0; i < PID_SLOT_COUNT; ++i) {
         slotValues[i][0] = '\0';
         slotValid[i] = false;
     }
 }
 
-static void clearSlot(PIDSlot slot) {
+void clearSlot(PIDSlot slot) {
     if (slot < 0 || slot >= PID_SLOT_COUNT) return;
     slotValues[slot][0] = '\0';
     slotValid[slot] = false;
 }
 
-static void setSlotValue(PIDSlot slot, const char *value) {
-    if (slot < 0 || slot >= PID_SLOT_COUNT) return;
+void setSlotValue(PIDSlot slot, const char *value) {
+    if (slot < 0 || slot >= PID_SLOT_COUNT || !value) return;
     copyValue(slotValues[slot], value, sizeof(slotValues[slot]));
     slotValid[slot] = true;
 }
 
-static void SPIcycle(uint8_t cmd, uint8_t data, uint8_t &status, uint8_t &resp) {
-    digitalWrite(PIN_CS, LOW);
-    delayMicroseconds(CS_SETUP_US);
-    status = SPI1.transfer(cmd);
-    resp   = SPI1.transfer(data);
-    digitalWrite(PIN_CS, HIGH);
-    delayMicroseconds(CS_HOLD_US);
+void releaseRequest() {
+    HC58Transport::release(HC58Transport::Client::PID);
+    requestState = RequestState::Idle;
+    requestedPid = 0;
+    requestDeadlineMs = 0;
+    nextPollMs = millis() + POLL_GAP_MS;
 }
 
-static void hc58_init() {
-    uint8_t s, d;
-
-    digitalWrite(PIN_RST, LOW);
-    delay(500);
-    digitalWrite(PIN_RST, HIGH);
-    delay(5);
-
-    SPIcycle(0x12, 0x1A, s, d);   // CCR-first
-    SPIcycle(0x10, 0xC0, s, d);   // RENA + TENA
+void failRequest() {
+    clearSlot(requestedSlot);
+    releaseRequest();
 }
 
-static void sendPIDRequest(uint8_t pid) {
-    uint8_t s, d;
-
-    SPIcycle(0x68, 0x14, s, d);
-    SPIcycle(0x6A, 0x04, s, d);
-    SPIcycle(0xF1, 0x04, s, d);
-    SPIcycle(0x01, 0x04, s, d);
-    SPIcycle(pid,  0x0C, s, d);
-}
-
-static bool drainFIFOUntilQuiet(uint16_t quietGapMs, uint16_t maxCaptureMs, int &lenOut) {
-    uint8_t s, d;
-    frameLen = 0;
-
-    unsigned long startMs    = millis();
-    unsigned long lastByteMs = millis();
-
-    while ((millis() - startMs) < maxCaptureMs) {
-        SPIcycle(0x00, 0x02, s, d);
-
-        if (s != 0x10 && s != 0x00) {
-            if (frameLen < (int)sizeof(frame)) {
-                frame[frameLen++] = d;
-            }
-            lastByteMs = millis();
-        }
-
-        if (frameLen > 0 && (millis() - lastByteMs) >= quietGapMs) {
-            break;
-        }
+void cancelRequest() {
+    if (requestState != RequestState::Idle ||
+        HC58Transport::isOwnedBy(HC58Transport::Client::PID)) {
+        HC58Transport::release(HC58Transport::Client::PID);
     }
-
-    lenOut = frameLen;
-    return (frameLen > 0);
+    requestState = RequestState::Idle;
+    requestedPid = 0;
+    requestDeadlineMs = 0;
 }
 
-static bool extractPCMResponse(uint8_t requestedPid, uint8_t *buf, int len, uint8_t *out, int &outLen) {
-    outLen = 0;
-
-    int needLen = 6;  // default for 1-data-byte Mode 01 PIDs
-
-    if (requestedPid == PID_MAF || requestedPid == PID_O2_B1 || requestedPid == PID_O2_B2) {
-        needLen = 7;  // 2 data bytes
-    }
-
-    for (int i = 0; i <= len - needLen; i++) {
-        if (buf[i]     == 0x48 &&
-            buf[i + 1] == 0x6B &&
-            buf[i + 2] == 0x10 &&
-            buf[i + 3] == 0x41 &&
-            buf[i + 4] == requestedPid) {
-
-            for (int j = 0; j < needLen; j++) {
-                out[j] = buf[i + j];
-            }
-            outLen = needLen;
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// ============================================================
-// Decode helpers
-// ============================================================
-static bool decodeTPS(uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 6 || !out || outSize == 0) return false;
-    if (buf[4] != PID_TPS) return false;
-
-    int tps = (buf[5] * 100) / 255;
-    if (tps < 0) tps = 0;
-    if (tps > 100) tps = 100;
-
-    snprintf(out, outSize, "%d", tps);
+bool decodeTPS(const uint8_t *buf, uint8_t len, char *out, size_t outSize) {
+    if (!buf || len < 6 || !out || outSize == 0 || buf[4] != PID_TPS) return false;
+    int value = (buf[5] * 100) / 255;
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    snprintf(out, outSize, "%d", value);
     return true;
 }
 
-static bool decodeIAT(uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 6 || !out || outSize == 0) return false;
-    if (buf[4] != PID_IAT) return false;
-
-    int tempC = (int)buf[5] - 40;
-    int tempF = (tempC * 9 / 5) + 32;
-
+bool decodeIAT(const uint8_t *buf, uint8_t len, char *out, size_t outSize) {
+    if (!buf || len < 6 || !out || outSize == 0 || buf[4] != PID_IAT) return false;
+    const int tempC = static_cast<int>(buf[5]) - 40;
+    const int tempF = (tempC * 9 / 5) + 32;
     snprintf(out, outSize, "%d", tempF);
     return true;
 }
 
-static bool decodeMAP(uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 6 || !out || outSize == 0) return false;
-    if (buf[4] != PID_MAP) return false;
-
-    int kpa = (int)buf[5];
-    if (kpa < 0) kpa = 0;
-    if (kpa > 255) kpa = 255;
-
-    snprintf(out, outSize, "%d", kpa);
+bool decodeMAP(const uint8_t *buf, uint8_t len, char *out, size_t outSize) {
+    if (!buf || len < 6 || !out || outSize == 0 || buf[4] != PID_MAP) return false;
+    snprintf(out, outSize, "%d", static_cast<int>(buf[5]));
     return true;
 }
 
-static bool decodeMAF(uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 7 || !out || outSize == 0) return false;
-    if (buf[4] != PID_MAF) return false;
-
-    int raw = ((int)buf[5] << 8) | buf[6];
-    int maf = (raw + 50) / 100;   // rounded integer g/s
-
-    if (maf < 0) maf = 0;
-    if (maf > 999) maf = 999;
-
-    snprintf(out, outSize, "%d", maf);
+bool decodeMAF(const uint8_t *buf, uint8_t len, char *out, size_t outSize) {
+    if (!buf || len < 7 || !out || outSize == 0 || buf[4] != PID_MAF) return false;
+    const int raw = (static_cast<int>(buf[5]) << 8) | buf[6];
+    int value = (raw + 50) / 100;
+    if (value < 0) value = 0;
+    if (value > 999) value = 999;
+    snprintf(out, outSize, "%d", value);
     return true;
 }
 
-static bool decodeCalcLoad(uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 6 || !out || outSize == 0) return false;
-    if (buf[4] != PID_CALC_LOAD) return false;
-
-    int load = (buf[5] * 100) / 255;
-    if (load < 0) load = 0;
-    if (load > 100) load = 100;
-
-    snprintf(out, outSize, "%d", load);
+bool decodeCalcLoad(const uint8_t *buf, uint8_t len, char *out, size_t outSize) {
+    if (!buf || len < 6 || !out || outSize == 0 || buf[4] != PID_CALC_LOAD) return false;
+    int value = (buf[5] * 100) / 255;
+    if (value < 0) value = 0;
+    if (value > 100) value = 100;
+    snprintf(out, outSize, "%d", value);
     return true;
 }
 
-static bool decodeTiming(uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 6 || !out || outSize == 0) return false;
-    if (buf[4] != PID_TIMING) return false;
-
-    int timing = ((int)buf[5] / 2) - 64;
-
-    snprintf(out, outSize, "%d", timing);
+bool decodeTiming(const uint8_t *buf, uint8_t len, char *out, size_t outSize) {
+    if (!buf || len < 6 || !out || outSize == 0 || buf[4] != PID_TIMING) return false;
+    const int value = (static_cast<int>(buf[5]) / 2) - 64;
+    snprintf(out, outSize, "%d", value);
     return true;
 }
 
-static bool decodeO2mV(uint8_t expectedPid, uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 7 || !out || outSize == 0) return false;
-    if (buf[4] != expectedPid) return false;
-
-    // Mode 01 PIDs 0x14/0x15:
-    // A = voltage in 0.005 V steps
-    int mv = (int)buf[5] * 5;
-
-    if (mv < 0) mv = 0;
-    if (mv > 1275) mv = 1275;
-
-    snprintf(out, outSize, "%d", mv);
+bool decodeO2mV(uint8_t expectedPid, const uint8_t *buf, uint8_t len,
+                char *out, size_t outSize) {
+    if (!buf || len < 7 || !out || outSize == 0 || buf[4] != expectedPid) return false;
+    int value = static_cast<int>(buf[5]) * 5;
+    if (value < 0) value = 0;
+    if (value > 1275) value = 1275;
+    snprintf(out, outSize, "%d", value);
     return true;
 }
 
-static bool decodeFuelTrim(uint8_t expectedPid, uint8_t *buf, int len, char *out, size_t outSize) {
-    if (!buf || len < 6 || !out || outSize == 0) return false;
-    if (buf[4] != expectedPid) return false;
-
-    int val = ((int)buf[5] - 128) * 100 / 128;
-
-    // clamp for sanity
-    if (val < -100) val = -100;
-    if (val > 100)  val = 100;
-
-    snprintf(out, outSize, "%d", val);
+bool decodeFuelTrim(uint8_t expectedPid, const uint8_t *buf, uint8_t len,
+                    char *out, size_t outSize) {
+    if (!buf || len < 6 || !out || outSize == 0 || buf[4] != expectedPid) return false;
+    int value = (static_cast<int>(buf[5]) - 128) * 100 / 128;
+    if (value < -100) value = -100;
+    if (value > 100) value = 100;
+    snprintf(out, outSize, "%d", value);
     return true;
 }
 
-// ============================================================
-// HC58 bring-up
-// ============================================================
-static void hc58_beginIfNeeded() {
-    if (hc58Ready) return;
-
-    pinMode(PIN_INT, INPUT);
-    pinMode(PIN_RST, OUTPUT);
-    pinMode(PIN_CS, OUTPUT);
-
-    digitalWrite(PIN_CS, HIGH);
-    digitalWrite(PIN_RST, HIGH);
-
-    SPI1.setMISO(PIN_MISO);
-    SPI1.setMOSI(PIN_MOSI);
-    SPI1.setSCK(PIN_SCK);
-    SPI1.begin();
-    SPI1.beginTransaction(SPISettings(SPI_HZ, MSBFIRST, SPI_MODE3));
-
-    hc58_init();
-    hc58Ready = true;
-}
-
-// ============================================================
-// Shared poll helper
-// ============================================================
-static void pollOnePidToSlot(uint8_t pid, PIDSlot slot) {
-    sendPIDRequest(pid);
-
-    delay(POSTTX_MS);
-    delayMicroseconds(EOD_US);
-
-    int len = 0;
-    bool gotFrame = drainFIFOUntilQuiet(QUIET_GAP_MS, MAX_CAPTURE_MS, len);
-
-    if (!(gotFrame && extractPCMResponse(pid, frame, len, cleanResp, cleanRespLen))) {
-        clearSlot(slot);
-        return;
-    }
-
-    char buf[8];
-    bool ok = false;
-
-    switch (pid) {
-        case PID_TPS:
-            ok = decodeTPS(cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
-        case PID_IAT:
-            ok = decodeIAT(cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
-        case PID_MAP:
-            ok = decodeMAP(cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
-        case PID_MAF:
-            ok = decodeMAF(cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
-        case PID_CALC_LOAD:
-            ok = decodeCalcLoad(cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
-        case PID_TIMING:
-            ok = decodeTiming(cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
-        case PID_O2_B1:
-            ok = decodeO2mV(PID_O2_B1, cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
-        case PID_O2_B2:
-            ok = decodeO2mV(PID_O2_B2, cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
-
+bool decodeResponse(const uint8_t *buf, uint8_t len, char *out, size_t outSize) {
+    switch (requestedPid) {
+        case PID_TPS:       return decodeTPS(buf, len, out, outSize);
+        case PID_IAT:       return decodeIAT(buf, len, out, outSize);
+        case PID_MAP:       return decodeMAP(buf, len, out, outSize);
+        case PID_MAF:       return decodeMAF(buf, len, out, outSize);
+        case PID_CALC_LOAD: return decodeCalcLoad(buf, len, out, outSize);
+        case PID_TIMING:    return decodeTiming(buf, len, out, outSize);
+        case PID_O2_B1:     return decodeO2mV(PID_O2_B1, buf, len, out, outSize);
+        case PID_O2_B2:     return decodeO2mV(PID_O2_B2, buf, len, out, outSize);
         case PID_STFT1:
         case PID_LTFT1:
         case PID_STFT2:
         case PID_LTFT2:
-            ok = decodeFuelTrim(pid, cleanResp, cleanRespLen, buf, sizeof(buf));
-            break;
+            return decodeFuelTrim(requestedPid, buf, len, out, outSize);
         default:
-            ok = false;
-            break;
-    }
-
-    if (ok) {
-        setSlotValue(slot, buf);
-    } else {
-        clearSlot(slot);
+            return false;
     }
 }
 
-// ============================================================
-// Per-page poll cycles
-// ============================================================
-static void pollPID1Cycle() {
-    switch (pollIndex) {
-        case 0:
-            pollOnePidToSlot(PID_TPS, PID_SLOT_Q1);
-            break;
-
-        case 1:
-            pollOnePidToSlot(PID_TPS, PID_SLOT_Q1);
-            break;
-
-        case 2:
-            pollOnePidToSlot(PID_MAP, PID_SLOT_Q3);
-            break;
-
-        case 3:
-            pollOnePidToSlot(PID_TPS, PID_SLOT_Q1);
-            break;
-
-        case 4:
-            pollOnePidToSlot(PID_MAF, PID_SLOT_Q4);
-            break;
-
-        case 5:
-            pollOnePidToSlot(PID_TPS, PID_SLOT_Q1);
-            break;
-
-        default:
-            pollOnePidToSlot(PID_IAT, PID_SLOT_Q2);
-            break;
-    }
-
-    pollIndex++;
-    if (pollIndex >= 7) {
-        pollIndex = 0;
-    }
+bool exactRequestEcho(const HC58Transport::Frame &frame) {
+    return frame.length == sizeof(requestBytes) &&
+           memcmp(frame.bytes, requestBytes, sizeof(requestBytes)) == 0;
 }
 
-static void pollPID2Cycle() {
-    switch (pollIndex) {
-        case 0:
-            pollOnePidToSlot(PID_TIMING, PID_SLOT_Q2);
-            break;
+const uint8_t *findPositiveReply(const HC58Transport::Frame &frame, uint8_t &remaining) {
+    const uint8_t need = (requestedPid == PID_MAF ||
+                          requestedPid == PID_O2_B1 ||
+                          requestedPid == PID_O2_B2) ? 7 : 6;
 
-        case 1:
-            pollOnePidToSlot(PID_CALC_LOAD, PID_SLOT_Q1);
-            break;
-
-        case 2:
-            pollOnePidToSlot(PID_TIMING, PID_SLOT_Q2);
-            break;
-
-        case 3:
-            pollOnePidToSlot(PID_O2_B1, PID_SLOT_Q3);
-            break;
-
-        case 4:
-            pollOnePidToSlot(PID_TIMING, PID_SLOT_Q2);
-            break;
-
-        case 5:
-            pollOnePidToSlot(PID_CALC_LOAD, PID_SLOT_Q1);
-            break;
-
-        case 6:
-            pollOnePidToSlot(PID_TIMING, PID_SLOT_Q2);
-            break;
-
-        default:
-            pollOnePidToSlot(PID_O2_B2, PID_SLOT_Q4);
-            break;
+    if (frame.length < need) return nullptr;
+    for (uint8_t i = 0; i + need <= frame.length; ++i) {
+        if (frame.bytes[i]     == 0x48 &&
+            frame.bytes[i + 1] == 0x6B &&
+            frame.bytes[i + 2] == 0x10 &&
+            frame.bytes[i + 3] == 0x41 &&
+            frame.bytes[i + 4] == requestedPid) {
+            remaining = frame.length - i;
+            return &frame.bytes[i];
+        }
     }
-
-    pollIndex++;
-    if (pollIndex >= 8) {
-        pollIndex = 0;
-    }
+    return nullptr;
 }
 
-static void pollPID3Cycle() {
-    switch (pollIndex) {
-        case 0:
-            pollOnePidToSlot(PID_STFT1, PID_SLOT_Q1);
-            break;
-        case 1:
-            pollOnePidToSlot(PID_LTFT1, PID_SLOT_Q2);
-            break;
-        case 2:
-            pollOnePidToSlot(PID_STFT2, PID_SLOT_Q3);
-            break;
-        default:
-            pollOnePidToSlot(PID_LTFT2, PID_SLOT_Q4);
-            break;
+bool isNegativeMode01Reply(const HC58Transport::Frame &frame) {
+    for (uint8_t i = 0; i + 5 < frame.length; ++i) {
+        if (frame.bytes[i]     == 0x48 &&
+            frame.bytes[i + 1] == 0x6B &&
+            frame.bytes[i + 2] == 0x10 &&
+            frame.bytes[i + 3] == 0x7F &&
+            frame.bytes[i + 4] == 0x01) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void selectNextRequest(uint8_t &pid, PIDSlot &slot) {
+    if (activePage == PAGE_PID1) {
+        switch (pollIndex) {
+            case 0:
+            case 1:
+            case 3:
+            case 5:
+                pid = PID_TPS; slot = PID_SLOT_Q1; break;
+            case 2:
+                pid = PID_MAP; slot = PID_SLOT_Q3; break;
+            case 4:
+                pid = PID_MAF; slot = PID_SLOT_Q4; break;
+            default:
+                pid = PID_IAT; slot = PID_SLOT_Q2; break;
+        }
+        pollIndex = (pollIndex + 1) % 7;
+        return;
     }
 
+    if (activePage == PAGE_PID2) {
+        switch (pollIndex) {
+            case 0:
+            case 2:
+            case 4:
+            case 6:
+                pid = PID_TIMING; slot = PID_SLOT_Q2; break;
+            case 1:
+            case 5:
+                pid = PID_CALC_LOAD; slot = PID_SLOT_Q1; break;
+            case 3:
+                pid = PID_O2_B1; slot = PID_SLOT_Q3; break;
+            default:
+                pid = PID_O2_B2; slot = PID_SLOT_Q4; break;
+        }
+        pollIndex = (pollIndex + 1) % 8;
+        return;
+    }
+
+    switch (pollIndex) {
+        case 0: pid = PID_STFT1; slot = PID_SLOT_Q1; break;
+        case 1: pid = PID_LTFT1; slot = PID_SLOT_Q2; break;
+        case 2: pid = PID_STFT2; slot = PID_SLOT_Q3; break;
+        default: pid = PID_LTFT2; slot = PID_SLOT_Q4; break;
+    }
     pollIndex = (pollIndex + 1) & 0x03;
 }
 
-// ============================================================
-// Public API
-// ============================================================
+void startNextRequest() {
+    uint8_t pid = 0;
+    PIDSlot slot = PID_SLOT_Q1;
+    selectNextRequest(pid, slot);
+
+    if (!HC58Transport::claim(HC58Transport::Client::PID)) {
+        nextPollMs = millis() + POLL_GAP_MS;
+        return;
+    }
+
+    requestedPid = pid;
+    requestedSlot = slot;
+    requestBytes[0] = 0x68;
+    requestBytes[1] = 0x6A;
+    requestBytes[2] = 0xF1;
+    requestBytes[3] = 0x01;
+    requestBytes[4] = pid;
+
+    if (!HC58Transport::sendFrame(HC58Transport::Client::PID,
+                                  requestBytes, sizeof(requestBytes))) {
+        failRequest();
+        return;
+    }
+
+    requestState = RequestState::WaitTxEcho;
+    requestDeadlineMs = millis() + TX_TIMEOUT_MS;
+}
+
+}  // namespace
+
 void PIDManager_begin() {
     activePage = PAGE_BOOTLOGO;
     clearAllSlots();
+    requestState = RequestState::Idle;
     nextPollMs = millis();
     pollIndex = 0;
-    hc58_beginIfNeeded();
 }
 
 void PIDManager_setPage(PageID page) {
+    cancelRequest();
     activePage = page;
     clearAllSlots();
     nextPollMs = millis();
@@ -496,32 +315,73 @@ void PIDManager_setPage(PageID page) {
 }
 
 void PIDManager_update() {
-    if (activePage != PAGE_PID1 &&
-        activePage != PAGE_PID2 &&
-        activePage != PAGE_PID3) {
+    if (!isPidPage(activePage) || !HC58Transport::isReady()) {
+        cancelRequest();
         return;
     }
 
-
-    if (!hc58Ready) {
-        hc58_beginIfNeeded();
-        if (!hc58Ready) return;
-    }
-
-    uint32_t now = millis();
-    if (now < nextPollMs) {
+    if (requestState != RequestState::Idle) {
+        if (deadlineReached(requestDeadlineMs)) {
+            failRequest();
+        }
         return;
     }
 
-    if (activePage == PAGE_PID1) {
-        pollPID1Cycle();
-    } else if (activePage == PAGE_PID2) {
-        pollPID2Cycle();
-    } else if (activePage == PAGE_PID3) {
-        pollPID3Cycle();
+    if (static_cast<int32_t>(millis() - nextPollMs) >= 0) {
+        startNextRequest();
+    }
+}
+
+void PIDManager_onHc58Frame(const HC58Transport::Frame &frame) {
+    if (requestState == RequestState::Idle ||
+        !HC58Transport::isOwnedBy(HC58Transport::Client::PID)) {
+        return;
     }
 
-    nextPollMs = millis() + POLL_GAP_MS;
+    if (frame.completion.rxFifoOverrun) {
+        failRequest();
+        return;
+    }
+
+    if (requestState == RequestState::WaitTxEcho) {
+        if (!exactRequestEcho(frame)) {
+            return;
+        }
+
+        if (frame.truncated || frame.completion.error ||
+            frame.completion.txStatus == HC58Transport::TxStatus::Underrun) {
+            failRequest();
+            return;
+        }
+
+        if (frame.completion.txStatus == HC58Transport::TxStatus::Successful) {
+            requestState = RequestState::WaitResponse;
+            requestDeadlineMs = millis() + RESPONSE_TIMEOUT_MS;
+        }
+        // Lost arbitration is intentionally ignored; the HC58 retries.
+        return;
+    }
+
+    if (frame.truncated || frame.completion.error) {
+        return;
+    }
+
+    uint8_t available = 0;
+    const uint8_t *reply = findPositiveReply(frame, available);
+    if (reply) {
+        char value[8];
+        if (decodeResponse(reply, available, value, sizeof(value))) {
+            setSlotValue(requestedSlot, value);
+        } else {
+            clearSlot(requestedSlot);
+        }
+        releaseRequest();
+        return;
+    }
+
+    if (isNegativeMode01Reply(frame)) {
+        failRequest();
+    }
 }
 
 bool PIDManager_isValid(PIDSlot slot) {
