@@ -4,6 +4,7 @@
 #include "Overlay_Warnings.h"
 #include "Touch_XPT2046.h"
 #include "PageManager.h"
+#include "HC58_Transport.h"
 #include "DHT20.h"
 #include <Wire.h>
 #include <string.h>
@@ -178,8 +179,10 @@ static void drawValueUnitOnly(
 
 // ===== Q1 =====
 
-static void drawQ1Full() {
-    fillRect_FAST(COL0_X0, TOP_Y0, COL0_X1, TOP_Y1, BLACK);
+static void drawQ1Full(bool clearBackground) {
+    if (clearBackground) {
+        fillRect_FAST(COL0_X0, TOP_Y0, COL0_X1, TOP_Y1, BLACK);
+    }
 
     drawValueUnitCentered(
         COL0_X0, TOP_Y0, COL0_X1, TOP_Y1,
@@ -199,8 +202,10 @@ static void drawQ1ValueOnly() {
 
 // ===== Q2 =====
 
-static void drawQ2Full() {
-    fillRect_FAST(COL1_X0, TOP_Y0, COL1_X1, TOP_Y1, BLACK);
+static void drawQ2Full(bool clearBackground) {
+    if (clearBackground) {
+        fillRect_FAST(COL1_X0, TOP_Y0, COL1_X1, TOP_Y1, BLACK);
+    }
 
     drawValueUnitCentered(
         COL1_X0, TOP_Y0, COL1_X1, TOP_Y1,
@@ -220,8 +225,10 @@ static void drawQ2ValueOnly() {
 
 // ===== Q3 =====
 
-static void drawQ3Full() {
-    fillRect_FAST(COL0_X0, BOT_Y0, COL0_X1, BOT_Y1, BLACK);
+static void drawQ3Full(bool clearBackground) {
+    if (clearBackground) {
+        fillRect_FAST(COL0_X0, BOT_Y0, COL0_X1, BOT_Y1, BLACK);
+    }
 
     drawValueUnitCentered(
         COL0_X0, BOT_Y0, COL0_X1, BOT_Y1,
@@ -241,8 +248,10 @@ static void drawQ3ValueOnly() {
 
 // ===== Q4 =====
 
-static void drawQ4Full() {
-    fillRect_FAST(COL1_X0, BOT_Y0, COL1_X1, BOT_Y1, BLACK);
+static void drawQ4Full(bool clearBackground) {
+    if (clearBackground) {
+        fillRect_FAST(COL1_X0, BOT_Y0, COL1_X1, BOT_Y1, BLACK);
+    }
 
     drawValueUnitCentered(
         COL1_X0, BOT_Y0, COL1_X1, BOT_Y1,
@@ -260,12 +269,15 @@ static void drawQ4ValueOnly() {
     drawValueUnitOnly(COL1_X0, BOT_Y0, COL1_X1, BOT_Y1, q4Value, "°F");
 }
 
-static void drawAllQuadrants() {
-    drawQ1Full();
-    drawQ2Full();
-    drawQ3Full();
-    drawQ4Full();
-    Overlay_Warnings_update(false,false,false,false,false);
+static void drawAllQuadrants(bool clearBackground) {
+    drawQ1Full(clearBackground);
+    HC58Transport::service();
+    drawQ2Full(clearBackground);
+    HC58Transport::service();
+    drawQ3Full(clearBackground);
+    HC58Transport::service();
+    drawQ4Full(clearBackground);
+    HC58Transport::service();
 }
 
 static bool readTransTempF(float &tempFOut) {
@@ -430,7 +442,6 @@ void Page_Env_begin() {
     copyValue(q3Value, "---", sizeof(q3Value));
     copyValue(q4Value, "---", sizeof(q4Value));
 
-    fillScreen_FAST(BLACK);
     setBacklightPWM(255);
 
     if (!dhtReady) {
@@ -450,7 +461,7 @@ void Page_Env_begin() {
         analogReady = true;
     }
 
-    drawAllQuadrants();
+    drawAllQuadrants(!PageManager_transitionClearedScreen());
     envDrawn = true;
 }
 

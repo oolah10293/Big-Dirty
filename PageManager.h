@@ -1,8 +1,6 @@
 #pragma once
 #include <stdint.h>
 
-// ---- List of all UI pages ----
-// Order matters: 0 MUST be BootLogo
 enum PageID {
     PAGE_BOOTLOGO = 0,
     PAGE_ENV = 1,
@@ -13,17 +11,13 @@ enum PageID {
     PAGE_MAX
 };
 
-// Initialize the page system
 void PageManager_begin();
-
-// Called on every loop
 void PageManager_update();
-
-// Switch to a different page
 void PageManager_switchTo(PageID id);
-
-// Get currently active page
 PageID PageManager_current();
 
-// Register a page (called during begin)
+// Valid during the destination page's begin() call. True means PageManager
+// already performed one chunked full-screen black clear for this transition.
+bool PageManager_transitionClearedScreen();
+
 void PageManager_registerPage(void (*beginFn)(), void (*updateFn)());

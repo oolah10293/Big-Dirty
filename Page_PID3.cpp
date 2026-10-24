@@ -5,6 +5,7 @@
 #include "Touch_XPT2046.h"
 #include "PageManager.h"
 #include "PID_Manager.h"
+#include "HC58_Transport.h"
 
 #include <string.h>
 
@@ -135,12 +136,13 @@ static void clearBlock(int x0, int x1, int y0, const char *tmpl, const char *uni
 
 // ===== Quadrants =====
 
-#define DRAW_Q_FULL(x0,y0,x1,y1,val,label) \
-    fillRect_FAST(x0,y0,x1,y1,BLACK); \
+#define DRAW_Q_FULL(x0,y0,x1,y1,val,label,clearBackground) do { \
+    if (clearBackground) fillRect_FAST(x0,y0,x1,y1,BLACK); \
     drawValueUnitCentered(x0,y0,x1,y1,val,3,"%", \
         FONT_FUR_DIGITS_5x7,SCALE_VAL, \
         FONT_FUR_CAPS_5x7,SCALE_UNIT,AQUA); \
-    drawLabelCentered(x0,x1,computeLabelY(y0),label);
+    drawLabelCentered(x0,x1,computeLabelY(y0),label); \
+} while (0)
 
 #define DRAW_Q_VAL(x0,y0,x1,y1,val) \
     clearBlock(x0,x1,y0,"-100","%"); \
@@ -149,24 +151,30 @@ static void clearBlock(int x0, int x1, int y0, const char *tmpl, const char *uni
         FONT_FUR_CAPS_5x7,SCALE_UNIT,AQUA);
 
 // Q1
-static void drawQ1Full(){ DRAW_Q_FULL(COL0_X0,TOP_Y0,COL0_X1,TOP_Y1,q1Value,"STFT1"); }
+static void drawQ1Full(bool clearBackground){ DRAW_Q_FULL(COL0_X0,TOP_Y0,COL0_X1,TOP_Y1,q1Value,"STFT1",clearBackground); }
 static void drawQ1Val(){  DRAW_Q_VAL (COL0_X0,TOP_Y0,COL0_X1,TOP_Y1,q1Value); }
 
 // Q2
-static void drawQ2Full(){ DRAW_Q_FULL(COL1_X0,TOP_Y0,COL1_X1,TOP_Y1,q2Value,"LTFT1"); }
+static void drawQ2Full(bool clearBackground){ DRAW_Q_FULL(COL1_X0,TOP_Y0,COL1_X1,TOP_Y1,q2Value,"LTFT1",clearBackground); }
 static void drawQ2Val(){  DRAW_Q_VAL (COL1_X0,TOP_Y0,COL1_X1,TOP_Y1,q2Value); }
 
 // Q3
-static void drawQ3Full(){ DRAW_Q_FULL(COL0_X0,BOT_Y0,COL0_X1,BOT_Y1,q3Value,"STFT2"); }
+static void drawQ3Full(bool clearBackground){ DRAW_Q_FULL(COL0_X0,BOT_Y0,COL0_X1,BOT_Y1,q3Value,"STFT2",clearBackground); }
 static void drawQ3Val(){  DRAW_Q_VAL (COL0_X0,BOT_Y0,COL0_X1,BOT_Y1,q3Value); }
 
 // Q4
-static void drawQ4Full(){ DRAW_Q_FULL(COL1_X0,BOT_Y0,COL1_X1,BOT_Y1,q4Value,"LTFT2"); }
+static void drawQ4Full(bool clearBackground){ DRAW_Q_FULL(COL1_X0,BOT_Y0,COL1_X1,BOT_Y1,q4Value,"LTFT2",clearBackground); }
 static void drawQ4Val(){  DRAW_Q_VAL (COL1_X0,BOT_Y0,COL1_X1,BOT_Y1,q4Value); }
 
-static void drawAll() {
-    drawQ1Full(); drawQ2Full(); drawQ3Full(); drawQ4Full();
-    Overlay_Warnings_update(false,false,false,false,false);
+static void drawAll(bool clearBackground) {
+    drawQ1Full(clearBackground);
+    HC58Transport::service();
+    drawQ2Full(clearBackground);
+    HC58Transport::service();
+    drawQ3Full(clearBackground);
+    HC58Transport::service();
+    drawQ4Full(clearBackground);
+    HC58Transport::service();
 }
 
 // ===== Sync =====
@@ -195,10 +203,9 @@ void Page_PID3_begin() {
     copyValue(q3Value, PIDManager_getDisplayText(PID_SLOT_Q3), sizeof(q3Value));
     copyValue(q4Value, PIDManager_getDisplayText(PID_SLOT_Q4), sizeof(q4Value));
 
-    fillScreen_FAST(BLACK);
     setBacklightPWM(255);
 
-    drawAll();
+    drawAll(!PageManager_transitionClearedScreen());
     pid3Drawn = true;
 }
 

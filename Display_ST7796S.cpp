@@ -1,6 +1,7 @@
 #include "Display_ST7796S.h"
 #include "PinConfig.h"
 #include "PageManager.h"
+#include "HC58_Transport.h"
 #include <SPI.h>
 #include <math.h>
 
@@ -22,6 +23,16 @@ static void wr_dat(uint8_t d) {
 static void wr_dat16(uint16_t d) {
     wr_dat(d >> 8);
     wr_dat(d & 0xFF);
+}
+
+// ===== Display/transport coexistence =====
+// Keep any uninterrupted TFT write to roughly 2,048 pixels (~2 ms at 16 MHz).
+static const uint32_t DISPLAY_FILL_CHUNK_PIXELS = 2048;
+static const uint16_t DISPLAY_PIXEL_SERVICE_INTERVAL = 32;
+static uint16_t pixelWritesSinceService = 0;
+
+static inline void serviceHc58Checkpoint() {
+    HC58Transport::service();
 }
 
 // ===== Backlight / dimmer constants =====
@@ -109,32 +120,44 @@ void drawPixel_FAST(int x, int y, uint16_t color) {
     wr_dat16(color);
 
     displaySPI_end();
+
+    pixelWritesSinceService++;
+    if (HC58Transport::intAsserted() ||
+        pixelWritesSinceService >= DISPLAY_PIXEL_SERVICE_INTERVAL) {
+        pixelWritesSinceService = 0;
+        serviceHc58Checkpoint();
+    }
 }
 
-// ===== FULL SCREEN FILL =====
-void fillScreen_FAST(uint16_t color) {
+// ===== Stream one RGB565 row =====
+// colors are host-order RGB565 values. The display receives high byte first.
+void drawRGB565Row_FAST(int x, int y, const uint16_t *colors, uint16_t count) {
+    if (!colors || count == 0 || y < 0 || y >= 320 || x >= 480) return;
+    if (x < 0) return;
+
+    uint16_t usable = count;
+    if ((uint32_t)x + usable > 480U) {
+        usable = (uint16_t)(480 - x);
+    }
+    if (usable == 0) return;
+
     displaySPI_begin();
-
-    setAddrWindow(0, 0, 479, 319);
-
-    uint8_t hi = color >> 8;
-    uint8_t lo = color & 0xFF;
+    setAddrWindow((uint16_t)x, (uint16_t)y,
+                  (uint16_t)(x + usable - 1), (uint16_t)y);
 
     digitalWrite(TFT_DC, HIGH);
     digitalWrite(TFT_CS, LOW);
 
-    uint32_t total = 480UL * 320UL;
-    while (total--) {
-        SPI.transfer(hi);
-        SPI.transfer(lo);
+    for (uint16_t i = 0; i < usable; ++i) {
+        const uint16_t color = colors[i];
+        SPI.transfer((uint8_t)(color >> 8));
+        SPI.transfer((uint8_t)(color & 0xFF));
     }
 
     digitalWrite(TFT_CS, HIGH);
-
-    // restore default full-screen window
-    setAddrWindow(0, 0, 479, 319);
-
     displaySPI_end();
+
+    serviceHc58Checkpoint();
 }
 
 // ===== FAST RECTANGLE FILL =====
@@ -149,28 +172,47 @@ void fillRect_FAST(int x0, int y0, int x1, int y1, uint16_t color) {
     if (x1 > 479) x1 = 479;
     if (y1 > 319) y1 = 319;
 
-    displaySPI_begin();
+    const uint16_t width = (uint16_t)(x1 - x0 + 1);
+    const uint8_t hi = (uint8_t)(color >> 8);
+    const uint8_t lo = (uint8_t)(color & 0xFF);
 
-    setAddrWindow((uint16_t)x0, (uint16_t)y0, (uint16_t)x1, (uint16_t)y1);
+    uint16_t rowsPerChunk =
+        (uint16_t)(DISPLAY_FILL_CHUNK_PIXELS / (uint32_t)width);
+    if (rowsPerChunk == 0) rowsPerChunk = 1;
 
-    uint8_t hi = color >> 8;
-    uint8_t lo = color & 0xFF;
-    uint32_t total = (uint32_t)(x1 - x0 + 1) * (uint32_t)(y1 - y0 + 1);
+    for (int chunkY0 = y0; chunkY0 <= y1; chunkY0 += rowsPerChunk) {
+        int chunkY1 = chunkY0 + rowsPerChunk - 1;
+        if (chunkY1 > y1) chunkY1 = y1;
 
-    digitalWrite(TFT_DC, HIGH);
-    digitalWrite(TFT_CS, LOW);
+        displaySPI_begin();
+        setAddrWindow((uint16_t)x0, (uint16_t)chunkY0,
+                      (uint16_t)x1, (uint16_t)chunkY1);
 
-    while (total--) {
-        SPI.transfer(hi);
-        SPI.transfer(lo);
+        digitalWrite(TFT_DC, HIGH);
+        digitalWrite(TFT_CS, LOW);
+
+        uint32_t pixels =
+            (uint32_t)width * (uint32_t)(chunkY1 - chunkY0 + 1);
+        while (pixels--) {
+            SPI.transfer(hi);
+            SPI.transfer(lo);
+        }
+
+        digitalWrite(TFT_CS, HIGH);
+        displaySPI_end();
+
+        serviceHc58Checkpoint();
     }
 
-    digitalWrite(TFT_CS, HIGH);
-
-    // restore default full-screen window
+    // Preserve the driver's previous postcondition.
+    displaySPI_begin();
     setAddrWindow(0, 0, 479, 319);
-
     displaySPI_end();
+}
+
+// ===== FULL SCREEN FILL =====
+void fillScreen_FAST(uint16_t color) {
+    fillRect_FAST(0, 0, 479, 319, color);
 }
 
 // ===== LED Backlight PWM (0–255) =====

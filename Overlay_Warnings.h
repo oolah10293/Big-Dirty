@@ -1,12 +1,12 @@
 #pragma once
 #include <stdint.h>
 
-// Initialize overlay system
 void Overlay_Warnings_begin();
 
-// Update warning icon states
-// true  = show icon
-// false = hide icon
+// Call immediately after a full-screen black clear. It marks all warning slots
+// physically empty so the next update draws only warnings that are actually on.
+void Overlay_Warnings_screenCleared();
+
 void Overlay_Warnings_update(
     bool seatbeltOn,
     bool brakeOn,

@@ -22,7 +22,7 @@ static void printHc58DiagnosticsIfConnected() {
   if (!Serial) return;
 
   if (!buildIdPrinted) {
-    Serial.println("BIGDIRTY_BUILD=HC58_INT_LIVE_TEST_1");
+    Serial.println("BIGDIRTY_BUILD=HC58_INT_LIVE_TEST_2");
     buildIdPrinted = true;
   }
 
@@ -48,7 +48,9 @@ static void printHc58DiagnosticsIfConnected() {
   Serial.print(" CONFLICT=");
   Serial.print(s.ownerConflicts);
   Serial.print(" OWNER=");
-  Serial.println(static_cast<int>(HC58Transport::owner()));
+  Serial.print(static_cast<int>(HC58Transport::owner()));
+  Serial.print(" PAGE=");
+  Serial.println(static_cast<int>(PageManager_current()));
 }
 
 void setup() {
@@ -57,7 +59,6 @@ void setup() {
   SD.begin(BUILTIN_SDCARD);
   initDisplay();
   backlightControl_init();
-  fillScreen_FAST(0x0000);
   initTouch();
 
   pinMode(PIN_SEATBELT, INPUT);

@@ -3,6 +3,7 @@
 #include "Touch_XPT2046.h"
 #include "PID_Manager.h"
 #include "DTC_Manager.h"
+#include "Overlay_Warnings.h"
 
 #include "Page_BootLogo.h"
 #include "Page_Env.h"
@@ -14,6 +15,7 @@
 static PageID currentPage = PAGE_BOOTLOGO;
 static PageID nextPage    = PAGE_BOOTLOGO;
 static bool pageChangePending = false;
+static bool transitionClearedScreen = false;
 
 static void (*pageBegin[PAGE_MAX])()  = { nullptr };
 static void (*pageUpdate[PAGE_MAX])() = { nullptr };
@@ -22,6 +24,13 @@ static uint32_t blockingInputUntil = 0;
 static uint32_t lastPageChangeTime = 0;
 constexpr uint32_t PAGE_SWITCH_GUARD_MS = 200;
 constexpr uint32_t PAGE_CHANGE_DEBOUNCE_MS = 500;
+
+static bool isGaugePage(PageID page) {
+    return page == PAGE_ENV ||
+           page == PAGE_PID1 ||
+           page == PAGE_PID2 ||
+           page == PAGE_PID3;
+}
 
 void PageManager_begin() {
     pageBegin[PAGE_BOOTLOGO]   = Page_BootLogo_begin;
@@ -45,16 +54,15 @@ void PageManager_begin() {
     currentPage = PAGE_BOOTLOGO;
     nextPage = PAGE_BOOTLOGO;
     pageChangePending = false;
+    transitionClearedScreen = false;
     lastPageChangeTime = millis();
     if (pageBegin[currentPage]) pageBegin[currentPage]();
     Touch_reset();
 }
 
 void PageManager_update() {
-    // The destination page's one-shot full redraw is deliberately deferred
-    // until after the touch/SPI guard. This prevents live PID value-only
-    // updates from appearing over stale ENV labels if the transition redraw
-    // is disturbed by the touch transaction that requested it.
+    // The destination page's one-shot redraw remains deferred until after the
+    // touch/SPI guard. This is the ENV -> PID1 mixed-label/value fix.
     if (pageChangePending && millis() < blockingInputUntil) {
         Touch_reset();
         return;
@@ -62,17 +70,29 @@ void PageManager_update() {
 
     if (pageChangePending) {
         pageChangePending = false;
+        const PageID oldPage = currentPage;
+        const PageID destination = nextPage;
 
-        if (currentPage == PAGE_DTC && nextPage != PAGE_DTC) {
+        if (oldPage == PAGE_DTC && destination != PAGE_DTC) {
             DTCManager_leavePage();
         }
 
-        // Cancels any outstanding PID matcher/ownership when leaving a PID
-        // page. PID page begin() calls this again with its own page, which is
-        // harmless and preserves the existing clear-on-entry behavior.
-        PIDManager_setPage(nextPage);
+        // Cancel any old PID matcher/ownership before display work. PID page
+        // begin() calls this again with the same destination, which is harmless.
+        PIDManager_setPage(destination);
 
-        currentPage = nextPage;
+        // Gauge pages share the same four-quadrant/background layout, so a
+        // gauge-to-gauge transition only clears each destination quadrant once.
+        // Crossing to/from boot or DTC gets exactly one chunked full-screen clear.
+        transitionClearedScreen =
+            !(isGaugePage(oldPage) && isGaugePage(destination));
+
+        if (transitionClearedScreen) {
+            fillScreen_FAST(0x0000);
+            Overlay_Warnings_screenCleared();
+        }
+
+        currentPage = destination;
         lastPageChangeTime = millis();
 
         if (pageBegin[currentPage]) {
@@ -97,4 +117,8 @@ void PageManager_switchTo(PageID id) {
 
 PageID PageManager_current() {
     return currentPage;
+}
+
+bool PageManager_transitionClearedScreen() {
+    return transitionClearedScreen;
 }

@@ -130,8 +130,10 @@ static void drawCenteredMixedLine(int y, const char *text, uint16_t color, uint8
 
 // ===== Draw list / state =====
 
-static void drawListArea() {
-    fillRect(0, LIST_Y0, 479, LIST_Y1, BLACK);
+static void drawListArea(bool clearArea) {
+    if (clearArea) {
+        fillRect(0, LIST_Y0, 479, LIST_Y1, BLACK);
+    }
 
     DTCState state = DTCManager_getState();
 
@@ -174,9 +176,9 @@ static void clearButtonArea() {
     fillRect(0, BUTTON_Y0, 479, 319, BLACK);
 }
 
-static void drawButton() {
+static void drawButton(bool clearArea) {
     if (!DTCManager_showClearButton()) {
-        clearButtonArea();
+        if (clearArea) clearButtonArea();
         return;
     }
 
@@ -202,7 +204,7 @@ static void drawButton() {
 
 // ===== Redraw sync =====
 
-static void syncDTCPageIfNeeded() {
+static void syncDTCPageIfNeeded(bool clearAreas) {
     DTCState state = DTCManager_getState();
     int count = DTCManager_getCount();
 
@@ -210,8 +212,8 @@ static void syncDTCPageIfNeeded() {
 
     if (!changed) return;
 
-    drawListArea();
-    drawButton();
+    drawListArea(clearAreas);
+    drawButton(clearAreas);
 
     dtcDrawn = true;
     lastState = state;
@@ -230,15 +232,15 @@ void Page_DTC_begin() {
     lastState = DTC_STATE_UNREAD;
     lastCount = -1;
 
-    fillScreen_FAST(BLACK);
     setBacklightPWM(255);
 
     DTCManager_enterPage();
+    syncDTCPageIfNeeded(!PageManager_transitionClearedScreen());
 }
 
 void Page_DTC_update() {
     DTCManager_update();
-    syncDTCPageIfNeeded();
+    syncDTCPageIfNeeded(true);
 
     DTCState state = DTCManager_getState();
     if (state == DTC_STATE_READING || state == DTC_STATE_CLEARING) {
@@ -253,7 +255,7 @@ void Page_DTC_update() {
 
         if (!clearPressed) {
             clearPressed = true;
-            drawButton();
+            drawButton(false);
             DTCManager_requestClear();
         }
         return;
