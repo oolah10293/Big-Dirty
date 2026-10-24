@@ -133,7 +133,7 @@ void clearLocalCodes() {
     dtcCount = 0;
 }
 
-const char *findDTCLabel(const char* code) {
+const char* findDTCLabel(const char* code) {
     if (!code || !code[0]) return nullptr;
     for (int i = 0; i < kKnownDTCCount; ++i) {
         if (strcmp(code, kKnownDTCs[i].code) == 0) {
@@ -161,7 +161,7 @@ bool hasRawCode(const char* rawCode) {
 bool addDTCUnique(const char *rawCode) {
     if (!rawCode || !rawCode[0]) return false;
     if (hasRawCode(rawCode)) return true;
-    if (dtcCount >= MAX_CODET) return true;
+    if (dtcCount >= MAX_CODES) return true;
 
     snprintf(rawDtcList[dtcCount], sizeof(rawDtcList[dtcCount]), "%s", rawCode);
     buildDisplayDTC(rawCode, dtcList[dtcCount], sizeof(dtcList[dtcCount]));
@@ -319,7 +319,7 @@ void classifyRead() {
         return;
     }
 
-    if (result03.negative || r07.negative) {
+    if (result03.negative || result07.negative) {
         finishOperation(DTC_STATE_REQUEST_ERROR);
         return;
     }
@@ -409,10 +409,7 @@ void DTCManager_update() {
         case Operation::WaitTx03:
         case Operation::WaitTx07:
         case Operation::WaitTx04:
-            if (deadlineReached(deadlineMs)) {
-
-                failOperation();
-            }
+            if (deadlineReached(deadlineMs)) failOperation();
             return;
 
         case Operation::Observe03:
