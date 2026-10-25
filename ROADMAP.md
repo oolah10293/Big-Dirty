@@ -8,34 +8,46 @@ Big Dirty has its recovered Save 14 baseline plus documented post-final work. Th
 - Keep the 2026-04-07 and March 2026 states available through history.
 - Treat post-final fixes and experiments as explicit branches/commits rather than silently redefining Save 14.
 
-## HC58 shared interrupt-driven transport — active design
+## HC58 shared interrupt-driven transport — hardware validated
 
-Interrupt operation has been proven on the actual hardware:
+Interrupt operation and the production integration have now been proven on the actual hardware.
+
+Protocol evidence:
 
 - `0x12` masked interrupts produced zero edges
 - `0x02` default interrupts produced reliable frame-completion events
 - 100 consecutive IRQ-only MAP requests returned 100 valid replies with zero timeouts or fallback cleanup
 
+Production integration:
+
+- one shared HC58/SPI1 owner
+- interrupt-driven RxFIFO service
+- non-blocking PID and DTC state machines
+- exact frame-content matching
+- ENV -> PID1 transition fix
+- reduced redundant display clearing
+- HC58 service checkpoints during long display and SD drawing operations
+
+Live Test 2 on 2026-10-24 completed a full warm-up through thermostat opening, repeated page cycling, engine start, and ignition-off without an observed functional problem. The log reached 16,545 completed frames with:
+
+    RFO=0
+    ERR=0
+    TRUNC=0
+    BUDGET=0
+    STUCK=0
+    CONFLICT=0
+
+Live Test 1 had produced its first RxFIFO-overrun flag at 3,955 completed frames and 36 by 58,689 frames. The display-service revision therefore passed more than four times beyond the prior first-failure point with no overrun.
+
 Evidence:
 
 - `tests/HC58_INT_Diagnostic/RESULTS_2026-10-23.md`
 - `tests/HC58_INT_Diagnostic/results/`
-
-Current design:
-
 - `docs/HC58_SHARED_TRANSPORT_DESIGN.md`
-- `design/HC58_Transport_API.h`
+- `docs/HC58_DISPLAY_SERVICE_TEST_RESULTS_2026-10-24.md`
 
-Next implementation work:
+The tested implementation remains on `test/hc58-shared-transport-live`. The remaining work is repository/release finalization rather than another functional transport rewrite.
 
-1. add the shared transport as the only HC58/SPI1 owner
-2. add continuous frame dispatch
-3. convert PID requests to a non-blocking request/echo/reply state machine
-4. convert DTC read/clear to non-blocking states while preserving current classification behavior
-5. remove duplicated manager-level HC58 code and timing-based drain loops
-6. validate live gauges, page changes, Mode 03/07, Mode 04, and long-run error counters
-
-No production package should be generated until an implementation revision is explicitly approved for hardware testing.
 
 ## Recover the last missing SD asset
 

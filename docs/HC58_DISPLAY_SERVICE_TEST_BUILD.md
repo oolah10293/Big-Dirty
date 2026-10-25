@@ -133,3 +133,28 @@ Completed in the working environment:
 - the only compiler warnings were the two pre-existing unused parameters in `Display_Fonts.cpp`
 
 The actual Teensy 4.1 board-package compile and hardware behavior remain the authoritative tests.
+
+
+## Hardware validation result — 2026-10-24
+
+**PASS.**
+
+The vehicle test completed a full warm-up through thermostat opening, repeated page cycling, engine start, and an ignition-off tail without an observed functional problem.
+
+The captured run reached 16,545 completed HC58 frames with all transport-failure counters still zero:
+
+    RFO=0
+    ERR=0
+    TRUNC=0
+    BUDGET=0
+    STUCK=0
+    CONFLICT=0
+
+Live Test 1 had recorded its first `RFO` at 3,955 completed frames. Live Test 2 therefore ran more than four times beyond that first-failure point without another overrun.
+
+Detailed hardware results and hashes:
+
+- `docs/HC58_DISPLAY_SERVICE_TEST_RESULTS_2026-10-24.md`
+- `tests/HC58_INT_Diagnostic/results/live_test_2_2026-10-24.txt.gz`
+
+No additional functional transport change is indicated by this captured test.

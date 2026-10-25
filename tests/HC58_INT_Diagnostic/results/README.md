@@ -44,3 +44,34 @@ Original text:
 Compressed file:
 
 - SHA-256: `5d501b6d61a9bf321157b82bfb63f9031c0f13a74aec4cfa5955843be496bf9d`
+
+
+### `live_test_2_2026-10-24.txt.gz`
+
+Live Test 2 full-warm-up/page-cycling/ignition-off USB diagnostic capture for commit:
+
+    8f6c261699c483f7b82a2824a6d3aca33fe8bd89
+
+Result:
+
+- 16,545 completed frames
+- RFO 0
+- ERR 0
+- TRUNC 0
+- BUDGET 0
+- STUCK 0
+- CONFLICT 0
+
+Original text:
+
+- bytes: 7,219
+- diagnostic lines: 81
+- SHA-256: `7462e6aea04800b2691f5815b9302ea9db0efdea8fe6bd57525b2e17e2795c80`
+
+Compressed file:
+
+- SHA-256: `e23c1d269915ee522c64332cbb605b2ba4928c23c57a9ccb5c86b8fbd375fca7`
+
+Full interpretation:
+
+- `docs/HC58_DISPLAY_SERVICE_TEST_RESULTS_2026-10-24.md`
